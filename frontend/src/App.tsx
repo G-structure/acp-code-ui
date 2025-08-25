@@ -157,6 +157,8 @@ function App() {
     }
   };
   
+  const loadedSessionsRef = useRef<Set<string>>(new Set());
+  
   const loadSessionHistory = async (sessionId: string) => {
     try {
       const response = await fetch(`/api/session-history?path=${encodeURIComponent(workingDirectory)}&sessionId=${sessionId}`);
@@ -220,12 +222,18 @@ function App() {
         updateSessionMessages(sessionId, messages);
         setSessionActive(true); // Mark session as active without clearing
         
-        // Tell backend to resume this specific Claude session
-        sendMessage({
-          type: 'start-session',
-          workingDirectory: workingDirectory,
-          sessionId: sessionId  // Pass the Claude session ID to resume
-        });
+        // Only tell backend to resume if we haven't already loaded this session
+        if (!loadedSessionsRef.current.has(sessionId)) {
+          console.log('Resuming session in backend:', sessionId);
+          loadedSessionsRef.current.add(sessionId);
+          sendMessage({
+            type: 'start-session',
+            workingDirectory: workingDirectory,
+            sessionId: sessionId  // Pass the Claude session ID to resume
+          });
+        } else {
+          console.log('Session already loaded in backend, just switching UI:', sessionId);
+        }
       }
     } catch (error) {
       console.error('Failed to load session history:', error);
@@ -266,14 +274,20 @@ function App() {
         loadAvailableSessions(workingDirectory);
       }, 1000);
     } else if (sessionActive && activeSessionId) {
-      // Re-establish existing session after reconnection
-      console.log('Re-establishing session:', activeSessionId);
-      hasStartedSession.current = true;
-      sendMessage({
-        type: 'start-session',
-        workingDirectory: workingDirectory,
-        sessionId: activeSessionId
-      });
+      // Re-establish existing session after reconnection only if not already loaded
+      if (!loadedSessionsRef.current.has(activeSessionId)) {
+        console.log('Re-establishing session after reconnection:', activeSessionId);
+        hasStartedSession.current = true;
+        loadedSessionsRef.current.add(activeSessionId);
+        sendMessage({
+          type: 'start-session',
+          workingDirectory: workingDirectory,
+          sessionId: activeSessionId
+        });
+      } else {
+        console.log('Session already established, skipping re-establishment:', activeSessionId);
+        hasStartedSession.current = true;
+      }
     }
   }, [isConnected, workingDirectory, sessionActive, activeSessionId]); // Depend on all relevant state
   

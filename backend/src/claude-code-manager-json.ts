@@ -18,6 +18,7 @@ export class ClaudeCodeManager extends EventEmitter {
   private isProcessing: boolean = false;
   private workingDirectory: string = process.cwd();
   private currentProcess: IPty | null = null;
+  private isExistingSession: boolean = false;  // Track if this is a resumed session
 
   constructor(private options: ClaudeCodeOptions = {}) {
     super();
@@ -32,16 +33,28 @@ export class ClaudeCodeManager extends EventEmitter {
   async startSession(workingDirectory?: string, existingSessionId?: string): Promise<void> {
     // Sessions are now implicit - just set up the working directory
     if (existingSessionId) {
-      // Resuming an existing Claude session
+      // Check if we're already using this session
+      if (this.baseSessionId === existingSessionId || this.claudeSessionId === existingSessionId) {
+        logger.info(`Session ${existingSessionId} already active, updating working directory`);
+        this.workingDirectory = workingDirectory || this.workingDirectory;
+        this.emit('session-started', { sessionId: this.baseSessionId });
+        this.emit('ready');
+        return;
+      }
+      
+      // Resuming a different existing Claude session
       this.claudeSessionId = existingSessionId;
       this.baseSessionId = existingSessionId;
-      this.messageCount = 1; // We'll be resuming, not starting fresh
-      logger.info(`Resuming Claude session ${existingSessionId}`);
+      this.messageCount = 0; // Start at 0, will increment when sending messages
+      this.isExistingSession = true; // Mark as existing session for resume
+      logger.info(`Setting up to resume existing Claude session ${existingSessionId}`);
     } else if (!this.baseSessionId) {
       // New session - generate temporary ID that Claude will replace
       this.baseSessionId = uuidv4();
       this.messageCount = 0;
       this.claudeSessionId = null; // Will be set when we get init message
+      this.isExistingSession = false; // This is a new session
+      logger.info(`Creating new session with temporary ID ${this.baseSessionId}`);
     }
     this.workingDirectory = workingDirectory || process.cwd();
     
@@ -137,13 +150,19 @@ export class ClaudeCodeManager extends EventEmitter {
       '--dangerously-skip-permissions'
     ];
     
-    // Always use --session-id with the specific session ID
-    // Claude will create a new session if it doesn't exist, or resume if it does
+    // Determine if this is a new session or resuming an existing one
     if (sessionToUse) {
-      args.push('--session-id', sessionToUse);
+      // If this is an existing session OR we've already sent messages in this session
+      if (this.isExistingSession || this.messageCount > 1) {
+        // Use --resume for existing sessions
+        args.push('--resume', sessionToUse);
+        logger.info(`Resuming session with --resume ${sessionToUse} (isExisting: ${this.isExistingSession}, messageCount: ${this.messageCount})`);
+      } else {
+        // This is the first message in a brand new session - use --session-id
+        args.push('--session-id', sessionToUse);
+        logger.info(`Creating new session with --session-id ${sessionToUse}`);
+      }
     }
-    // Note: We never use --resume because it doesn't allow specifying which session
-    // and could resume the wrong session when working with multiple sessions
     
     args.push(prompt);  // The prompt as argument
     
@@ -459,6 +478,7 @@ export class ClaudeCodeManager extends EventEmitter {
     this.messageCount = 0;
     this.isProcessing = false;
     this.currentProcess = null;
+    this.isExistingSession = false;
   }
 
   getStatus(): { active: boolean; sessionId: string | null; processing: boolean } {
