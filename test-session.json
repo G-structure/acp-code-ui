@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","model":"claude-3-5-sonnet-20241022","tools":["Read","Write","Bash"],"cwd":"/home/test"}
+{"type":"user","prompt":"Test prompt with tools"}
+{"type":"assistant","message":{"model":"claude-3-5-sonnet-20241022","content":[{"type":"thinking","text":"I need to think about this request..."},{"type":"text","text":"I'll help you with that. Let me read a file first."},{"type":"tool_use","id":"tool_use_1","name":"Read","input":{"file_path":"/tmp/test.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool_use_1","content":"File contents here"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Based on the file, here's my response."}],"usage":{"input_tokens":100,"output_tokens":50}}}

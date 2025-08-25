@@ -1,0 +1,435 @@
+import { spawn, IPty } from 'node-pty';
+import { EventEmitter } from 'events';
+import { v4 as uuidv4 } from 'uuid';
+import { logger } from './logger';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+
+interface ClaudeCodeOptions {
+  shell?: string;
+  cols?: number;
+  rows?: number;
+}
+
+export class ClaudeCodeManager extends EventEmitter {
+  public baseSessionId: string | null = null;  // Base session ID for the UI session
+  private messageCount: number = 0;  // Track message count for unique IDs
+  private isProcessing: boolean = false;
+  private workingDirectory: string = process.cwd();
+  private currentProcess: IPty | null = null;
+
+  constructor(private options: ClaudeCodeOptions = {}) {
+    super();
+    this.options = {
+      shell: process.platform === 'win32' ? 'powershell.exe' : 'bash',
+      cols: 120,
+      rows: 30,
+      ...options
+    };
+  }
+
+  async startSession(workingDirectory?: string): Promise<void> {
+    // Sessions are now implicit - just set up the working directory
+    if (!this.baseSessionId) {
+      this.baseSessionId = uuidv4();
+      this.messageCount = 0;
+    }
+    this.workingDirectory = workingDirectory || process.cwd();
+    
+    logger.info(`Claude Code ready with base session ${this.baseSessionId} in directory: ${this.workingDirectory}`);
+    
+    // Always ready since we spawn per message
+    this.emit('session-started', { sessionId: this.baseSessionId });
+    this.emit('ready');
+  }
+  
+  get sessionId(): string | null {
+    return this.baseSessionId;
+  }
+
+  async stopSession(): Promise<void> {
+    if (this.currentProcess) {
+      try {
+        this.currentProcess.kill();
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        logger.error('Error stopping current Claude process:', error);
+      }
+    }
+    this.cleanup();
+  }
+
+  sendPrompt(prompt: string): void {
+    if (!this.baseSessionId) {
+      throw new Error('No active session');
+    }
+
+    if (this.isProcessing) {
+      logger.warn('Already processing a prompt, ignoring new prompt');
+      return;
+    }
+
+    this.isProcessing = true;
+    this.messageCount++;
+    
+    // Log the user prompt for session history
+    this.logJsonDebug({
+      type: 'user',
+      prompt: prompt,
+      sessionId: this.baseSessionId,
+      messageCount: this.messageCount
+    });
+    
+    // Don't emit user message here - frontend already handles it
+    // Just spawn the claude process
+    this.spawnClaudeProcess(prompt);
+  }
+
+  private async logJsonDebug(data: any): Promise<void> {
+    try {
+      const logDir = path.join(this.workingDirectory, '.claude-debug');
+      await fs.mkdir(logDir, { recursive: true });
+      
+      const logFile = path.join(logDir, `session-${this.baseSessionId}.json`);
+      const timestamp = new Date().toISOString();
+      const logEntry = JSON.stringify({ timestamp, ...data }) + '\n';
+      
+      await fs.appendFile(logFile, logEntry);
+    } catch (error) {
+      logger.debug('Failed to write debug log:', error);
+    }
+  }
+
+  private spawnClaudeProcess(prompt: string): void {
+    logger.info(`Spawning Claude process for prompt: "${prompt.substring(0, 50)}..."`);
+    
+    // Kill any existing process
+    if (this.currentProcess) {
+      try {
+        this.currentProcess.kill();
+      } catch (e) {
+        // Ignore
+      }
+    }
+    
+    logger.info(`Using session ID: ${this.baseSessionId} (message ${this.messageCount})`);
+    
+    // Build args based on whether this is the first message or not
+    const args = [
+      '--print',  // Non-interactive mode
+      '--verbose',  // Required for stream-json with --print
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions'
+    ];
+    
+    if (this.messageCount === 1) {
+      // First message: create new session
+      args.push('--session-id', this.baseSessionId!);
+    } else {
+      // Subsequent messages: resume existing session
+      args.push('--resume', this.baseSessionId!);
+    }
+    
+    args.push(prompt);  // The prompt as argument
+    
+    logger.info(`Claude args: ${args.join(' ')}`);
+    
+    // Spawn claude with --print for single exchange
+    this.currentProcess = spawn('claude', args, {
+      name: 'xterm-256color',
+      cols: this.options.cols!,
+      rows: this.options.rows!,
+      cwd: this.workingDirectory,
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color'
+      }
+    });
+
+    let messageBuffer = '';
+    let isStreaming = false;
+    let streamMessageId: string | null = null;
+    let lastAssistantContent = '';
+    let hasEmittedMessage = false;
+    let lastJsonDebugData = '';  // Track last debug data to avoid duplicates
+
+    this.currentProcess.onData((data) => {
+      // logger.debug(`Claude output: ${data.substring(0, 200)}`);
+      messageBuffer += data;
+      
+      // Emit raw JSON for debugging (deduplicated)
+      if (data !== lastJsonDebugData) {
+        lastJsonDebugData = data;
+        const debugData = { raw: data };
+        this.emit('json-debug', debugData);
+        this.logJsonDebug(debugData);
+      }
+      
+      // Process complete lines
+      const lines = messageBuffer.split('\n');
+      messageBuffer = lines.pop() || ''; // Keep incomplete line in buffer
+      
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            const message = JSON.parse(line);
+            
+            // Emit parsed JSON for debugging (deduplicated by checking stringify)
+            const messageStr = JSON.stringify(message);
+            if (messageStr !== lastJsonDebugData) {
+              lastJsonDebugData = messageStr;
+              const debugData = { parsed: message };
+              this.emit('json-debug', debugData);
+              this.logJsonDebug(debugData);
+            }
+            
+            switch (message.type) {
+              case 'system':
+                if (message.subtype === 'init') {
+                  logger.debug('Received init message');
+                  // Emit tool/model info if needed
+                  this.emit('system-info', {
+                    model: message.model,
+                    tools: message.tools,
+                    cwd: message.cwd
+                  });
+                } else if (message.subtype === 'usage') {
+                  // Emit token usage info
+                  this.emit('token-usage', {
+                    input_tokens: message.input_tokens,
+                    output_tokens: message.output_tokens,
+                    cache_creation_input_tokens: message.cache_creation_input_tokens,
+                    cache_read_input_tokens: message.cache_read_input_tokens
+                  });
+                }
+                break;
+                
+              case 'user':
+                // Check if this is actually a tool result wrapped in a user message
+                if (message.message?.content) {
+                  const toolResults = message.message.content.filter((c: any) => c.type === 'tool_result');
+                  const toolUses = message.message.content.filter((c: any) => c.type === 'tool_use');
+                  
+                  // Emit tool results as separate messages
+                  toolResults.forEach((toolResult: any) => {
+                    this.emit('chat-message', {
+                      id: `tool-result-${Date.now()}-${Math.random()}`,
+                      type: 'tool_result',
+                      content: toolResult.content || 'Tool result',
+                      tool_use_id: toolResult.tool_use_id
+                    });
+                  });
+                  
+                  // Emit tool uses as separate messages
+                  toolUses.forEach((toolUse: any) => {
+                    this.emit('chat-message', {
+                      id: `tool-use-${Date.now()}-${Math.random()}`,
+                      type: 'tool_use',
+                      content: `Using tool: ${toolUse.name || 'Unknown'}`,
+                      tool_name: toolUse.name,
+                      tool_input: toolUse.input
+                    });
+                  });
+                  
+                  // Only log if it's not just tool results
+                  const hasNonToolContent = message.message.content.some((c: any) => 
+                    c.type !== 'tool_result' && c.type !== 'tool_use'
+                  );
+                  if (hasNonToolContent) {
+                    logger.debug('Received user message with mixed content');
+                  }
+                } else {
+                  logger.debug('Received user message echo');
+                }
+                break;
+                
+              case 'assistant':
+                // Assistant response - handle streaming with deduplication
+                if (message.message?.content) {
+                  // Check for thinking blocks
+                  const thinkingContent = message.message.content
+                    .filter((c: any) => c.type === 'thinking')
+                    .map((c: any) => c.text)
+                    .join('');
+                  
+                  if (thinkingContent) {
+                    // Emit thinking as a separate message type
+                    this.emit('chat-message', {
+                      id: `thinking-${Date.now()}-${Math.random()}`,
+                      type: 'thinking',
+                      content: thinkingContent,
+                      model: message.message?.model || undefined
+                    });
+                  }
+                  
+                  // Check for tool_use blocks in assistant messages
+                  const toolUses = message.message.content.filter((c: any) => c.type === 'tool_use');
+                  toolUses.forEach((toolUse: any) => {
+                    this.emit('chat-message', {
+                      id: `tool-use-${Date.now()}-${Math.random()}`,
+                      type: 'tool_use',
+                      content: `Using tool: ${toolUse.name || 'Unknown'}`,
+                      tool_name: toolUse.name,
+                      tool_input: toolUse.input
+                    });
+                    
+                    // Special handling for TodoWrite
+                    if (toolUse.name === 'TodoWrite' && toolUse.input?.todos) {
+                      this.emit('todo-update', {
+                        todos: toolUse.input.todos
+                      });
+                    }
+                  });
+                  
+                  // Extract text content
+                  const textContent = message.message.content
+                    .filter((c: any) => c.type === 'text')
+                    .map((c: any) => c.text)
+                    .join('');
+                  
+                  if (textContent && textContent !== lastAssistantContent) {
+                    lastAssistantContent = textContent;
+                    
+                    if (!hasEmittedMessage) {
+                      // First time seeing content - create new message
+                      hasEmittedMessage = true;
+                      isStreaming = true;
+                      streamMessageId = `msg-${Date.now()}`;
+                      
+                      // Emit initial assistant message with usage data
+                      this.emit('chat-message', {
+                        type: 'assistant',
+                        content: textContent,
+                        id: streamMessageId,
+                        streaming: true,
+                        model: message.message?.model || undefined,
+                        usage: message.message?.usage || undefined
+                      });
+                      
+                      // Emit token usage if available
+                      if (message.message?.usage) {
+                        this.emit('token-usage', message.message.usage);
+                      }
+                    } else if (isStreaming) {
+                      // Update existing streaming message
+                      this.emit('chat-message-update', {
+                        id: streamMessageId,
+                        content: textContent,
+                        model: message.message?.model || undefined,
+                        usage: message.message?.usage || undefined
+                      });
+                      
+                      // Emit token usage if available
+                      if (message.message?.usage) {
+                        this.emit('token-usage', message.message.usage);
+                      }
+                    }
+                    logger.debug(`Assistant message: ${textContent.substring(0, 100)}...`);
+                  }
+                }
+                break;
+                
+              case 'tool_use':
+                // Tool being used
+                this.emit('tool-use', {
+                  tool: message.tool_name,
+                  input: message.tool_input
+                });
+                // Also emit as a chat message for display
+                this.emit('chat-message', {
+                  id: `tool-use-${Date.now()}-${Math.random()}`,
+                  type: 'tool_use',
+                  content: `Using tool: ${message.tool_name}`,
+                  tool_name: message.tool_name,
+                  tool_input: message.tool_input
+                });
+                break;
+                
+              case 'tool_result':
+                // Tool result
+                this.emit('tool-result', {
+                  tool: message.tool_name,
+                  output: message.tool_result
+                });
+                // Also emit as a chat message for display
+                this.emit('chat-message', {
+                  id: `tool-result-${Date.now()}-${Math.random()}`,
+                  type: 'tool_result',
+                  content: `Tool result from: ${message.tool_name}`,
+                  tool_name: message.tool_name,
+                  tool_result: message.tool_result
+                });
+                break;
+                
+              case 'result':
+                // Final result with complete token usage
+                if (message.usage) {
+                  this.emit('token-usage', message.usage);
+                  logger.debug(`Final token usage - Input: ${message.usage.input_tokens}, Output: ${message.usage.output_tokens}`);
+                }
+                break;
+                
+              case 'error':
+                // Error from Claude
+                this.emit('error', new Error(message.error || 'Unknown error'));
+                this.isProcessing = false;
+                break;
+                
+              default:
+                logger.debug(`Unknown message type: ${message.type}`);
+            }
+          } catch (e) {
+            // Not JSON, might be error output
+            if (line.includes('Error:')) {
+              logger.error('Claude error:', line);
+              this.emit('error', new Error(line));
+              this.isProcessing = false;
+            } else {
+              logger.debug(`Non-JSON output: ${line.substring(0, 100)}`);
+            }
+          }
+        }
+      }
+    });
+
+    this.currentProcess.onExit(({ exitCode, signal }) => {
+      logger.debug(`Claude process exited with code ${exitCode}, signal ${signal}`);
+      
+      // Finalize streaming if active
+      if (isStreaming && streamMessageId) {
+        this.emit('chat-message-finalize', {
+          id: streamMessageId
+        });
+      }
+      
+      this.isProcessing = false;
+      this.currentProcess = null;
+      this.emit('ready');
+    });
+  }
+
+  sendCommand(_command: string): void {
+    // Not used in JSON mode
+    logger.warn('sendCommand not supported in JSON mode');
+  }
+
+  resize(cols: number, rows: number): void {
+    this.options.cols = cols;
+    this.options.rows = rows;
+  }
+
+  private cleanup(): void {
+    this.baseSessionId = null;
+    this.messageCount = 0;
+    this.isProcessing = false;
+    this.currentProcess = null;
+  }
+
+  getStatus(): { active: boolean; sessionId: string | null; processing: boolean } {
+    return {
+      active: this.sessionId !== null,
+      sessionId: this.sessionId,
+      processing: this.isProcessing
+    };
+  }
+}
