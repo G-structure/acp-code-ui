@@ -134,15 +134,20 @@ function App() {
     
     // Set new timeout to update working directory after user stops typing
     directoryTimeout.current = setTimeout(() => {
-      // Reset the session started flag when changing directories
-      hasStartedSession.current = false;
-      setWorkingDirectory(value);
-      // Update URL hash with the new directory
-      window.location.hash = encodeURIComponent(value);
-      // Save to history
-      saveDirectoryToHistory(value);
-      // Load available sessions for this directory
-      loadAvailableSessions(value);
+      // Only reset the session flag if the directory actually changed
+      if (workingDirectory !== value) {
+        console.log('Directory changed from', workingDirectory, 'to', value);
+        hasStartedSession.current = false;
+        setWorkingDirectory(value);
+        // Update URL hash with the new directory
+        window.location.hash = encodeURIComponent(value);
+        // Save to history
+        saveDirectoryToHistory(value);
+        // Load available sessions for this directory
+        loadAvailableSessions(value);
+      } else {
+        console.log('Directory unchanged, not resetting session');
+      }
     }, 500);
   };
   
@@ -245,10 +250,26 @@ function App() {
     // Skip if not connected or no working directory
     if (!isConnected || !workingDirectory) return;
     
-    // Skip if we've already started a session
-    if (hasStartedSession.current) return;
+    // Skip if we've already started a session for this directory
+    if (hasStartedSession.current) {
+      console.log('Session already started for this directory, skipping');
+      return;
+    }
     
-    if (!sessionActive && !activeSessionId) {
+    // Get current state from the store
+    const state = useClaudeStore.getState();
+    const currentSessionActive = state.sessionActive;
+    const currentActiveSessionId = state.activeSessionId;
+    
+    console.log('Session effect checking:', {
+      isConnected,
+      workingDirectory,
+      currentSessionActive,
+      currentActiveSessionId,
+      hasStartedSession: hasStartedSession.current
+    });
+    
+    if (!currentSessionActive && !currentActiveSessionId) {
       // Start new session if we don't have one - but with proper UUID
       console.log('Auto-starting new session for directory:', workingDirectory);
       
@@ -260,36 +281,37 @@ function App() {
       });
       
       hasStartedSession.current = true;
-      const { createSession } = useClaudeStore.getState();
+      const { createSession, startSession } = useClaudeStore.getState();
       createSession(newSessionId);
       startSession(workingDirectory);
       sendMessage({
         type: 'start-session',
         workingDirectory: workingDirectory,
-        sessionId: newSessionId
+        sessionId: newSessionId,
+        isNewSession: true  // Tell backend this is a new session, not a resume
       });
       
       // Refresh sessions after a delay
       setTimeout(() => {
         loadAvailableSessions(workingDirectory);
       }, 1000);
-    } else if (sessionActive && activeSessionId) {
+    } else if (currentSessionActive && currentActiveSessionId) {
       // Re-establish existing session after reconnection only if not already loaded
-      if (!loadedSessionsRef.current.has(activeSessionId)) {
-        console.log('Re-establishing session after reconnection:', activeSessionId);
+      if (!loadedSessionsRef.current.has(currentActiveSessionId)) {
+        console.log('Re-establishing session after reconnection:', currentActiveSessionId);
         hasStartedSession.current = true;
-        loadedSessionsRef.current.add(activeSessionId);
+        loadedSessionsRef.current.add(currentActiveSessionId);
         sendMessage({
           type: 'start-session',
           workingDirectory: workingDirectory,
-          sessionId: activeSessionId
+          sessionId: currentActiveSessionId
         });
       } else {
-        console.log('Session already established, skipping re-establishment:', activeSessionId);
+        console.log('Session already established, skipping re-establishment:', currentActiveSessionId);
         hasStartedSession.current = true;
       }
     }
-  }, [isConnected, workingDirectory, sessionActive, activeSessionId]); // Depend on all relevant state
+  }, [isConnected, workingDirectory, sendMessage]); // Only depend on connection and directory changes
   
   const handleSendPrompt = useCallback((prompt: string) => {
     console.log('handleSendPrompt called with:', prompt);
@@ -406,7 +428,8 @@ function App() {
                     sendMessage({
                       type: 'start-session',
                       workingDirectory: workingDirectory,
-                      sessionId: newSessionId
+                      sessionId: newSessionId,
+                      isNewSession: true  // Tell backend this is a new session, not a resume
                     });
                     
                     hasStartedSession.current = true; // Mark as started to prevent auto-start

@@ -212,8 +212,8 @@ wss.on('connection', (ws: any) => {
           break;
         case 'start-session':
           try {
-            logger.info(`Starting session with directory: ${data.workingDirectory}${data.sessionId ? `, existing session: ${data.sessionId}` : ''}`);
-            await claudeManager.startSession(data.workingDirectory, data.sessionId);
+            logger.info(`Starting session with directory: ${data.workingDirectory}${data.sessionId ? `, session ID: ${data.sessionId}` : ''}${data.isNewSession ? ' (new)' : ''}`);
+            await claudeManager.startSession(data.workingDirectory, data.sessionId, data.isNewSession);
             logger.info(`Session started with ID: ${claudeManager.sessionId}`);
             ws.send(JSON.stringify({
               type: 'session-started',
