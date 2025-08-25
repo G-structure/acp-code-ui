@@ -1,17 +1,17 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo, useMemo } from 'react';
 import {
   Box,
   TextField,
   IconButton,
-  List,
-  ListItem,
   Paper,
   Typography,
   CircularProgress,
   Chip,
   ToggleButton,
   ToggleButtonGroup,
-  Tooltip
+  Tooltip,
+  List,
+  ListItem
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -27,9 +27,10 @@ import {
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { cyberpunkCodeTheme } from '../theme/cyberpunkCodeTheme';
 import { useClaudeStore } from '../store/claudeStore';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import ToolResultBlock from './ToolResultBlock';
 
 interface ChatInterfaceProps {
   onSendMessage: (message: string) => void;
@@ -38,66 +39,215 @@ interface ChatInterfaceProps {
   onClearFiles?: () => void;
 }
 
+// Memoized message component
+const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessageBorder }: any) => {
+  return (
+    <ListItem
+      sx={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        mb: 2,
+        flexDirection: message.type === 'user' ? 'row-reverse' : 'row'
+      }}
+    >
+      <Box
+        sx={{
+          mr: message.type === 'user' ? 0 : 1,
+          ml: message.type === 'user' ? 1 : 0
+        }}
+      >
+        {getMessageIcon(message.type)}
+      </Box>
+      <Paper
+        elevation={1}
+        sx={{
+          p: 2,
+          maxWidth: '70%',
+          backgroundColor: getMessageColor(message.type),
+          border: getMessageBorder(message.type),
+          boxShadow: message.type === 'user' ? '0 0 20px rgba(0, 255, 255, 0.1)' : '0 0 20px rgba(255, 0, 255, 0.08)'
+        }}
+      >
+        <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Chip
+            label={
+              message.type === 'user' ? 'You' : 
+              message.type === 'assistant' ? 'Claude' :
+              message.type === 'thinking' ? 'Thinking' :
+              message.type === 'tool_use' ? `Tool: ${message.tool_name || 'Unknown'}` :
+              message.type === 'tool_result' ? 'Result' :
+              message.type
+            }
+            size="small"
+            color={message.type === 'user' ? 'primary' : 'secondary'}
+          />
+          <Typography variant="caption" color="text.secondary">
+            {new Date(message.timestamp).toLocaleTimeString()}
+          </Typography>
+          {message.tokens && (
+            <Typography variant="caption" color="text.secondary">
+              • {message.tokens} tokens
+            </Typography>
+          )}
+        </Box>
+        {message.type === 'tool_result' ? (
+          <ToolResultBlock content={message.content} />
+        ) : (
+          <ReactMarkdown
+            components={{
+              code({ inline, className, children, ...props }: any) {
+                const match = /language-(\w+)/.exec(className || '');
+                return !inline && match ? (
+                  <SyntaxHighlighter
+                    style={cyberpunkCodeTheme}
+                    language={match[1]}
+                    PreTag="div"
+                    customStyle={{
+                      background: '#0a0a0a',
+                      border: '1px solid rgba(0, 255, 255, 0.2)',
+                      borderRadius: '4px',
+                      padding: '12px',
+                      boxShadow: 'inset 0 0 20px rgba(0, 255, 255, 0.05)',
+                    }}
+                    {...props}
+                  >
+                    {String(children).replace(/\n$/, '')}
+                  </SyntaxHighlighter>
+                ) : (
+                  <code 
+                    className={className} 
+                    style={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                      color: '#00ffff',
+                      padding: '2px 6px',
+                      borderRadius: '3px',
+                      border: '1px solid rgba(0, 255, 255, 0.2)',
+                      fontSize: '0.9em',
+                      fontFamily: '"Fira Code", "Courier New", monospace',
+                      textShadow: '0 0 2px rgba(0, 255, 255, 0.3)'
+                    }}
+                    {...props}
+                  >
+                    {children}
+                  </code>
+                );
+              }
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+        )}
+      </Paper>
+    </ListItem>
+  );
+});
+
+ChatMessage.displayName = 'ChatMessage';
+
+// Memoized messages list
+const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageColor, getMessageBorder }: any) => {
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
+
+  return (
+    <>
+      <List>
+        {messages.map((message: any) => (
+          <ChatMessage
+            key={message.id}
+            message={message}
+            getMessageIcon={getMessageIcon}
+            getMessageColor={getMessageColor}
+            getMessageBorder={getMessageBorder}
+          />
+        ))}
+        {processing && (
+          <ListItem sx={{ display: 'flex', alignItems: 'center' }}>
+            <BotIcon color="secondary" sx={{ mr: 1 }} />
+            <CircularProgress size={20} />
+            <Typography sx={{ ml: 2 }} color="text.secondary">
+              Claude is thinking...
+            </Typography>
+          </ListItem>
+        )}
+      </List>
+      <div ref={messagesEndRef} />
+    </>
+  );
+});
+
+MessagesList.displayName = 'MessagesList';
+
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, selectedFiles = [], onClearFiles }) => {
   const [input, setInput] = useState('');
   const [messageFilters, setMessageFilters] = useState<string[]>(['user', 'assistant']);
   const [voiceError, setVoiceError] = useState<string>('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const { messages, processing, clearMessages, totalTokens, model } = useClaudeStore();
   
   const { isRecording, isTranscribing, voiceEnabled, toggleRecording } = useVoiceInput({
     onTranscription: (text) => {
-      // Append transcribed text to existing input
       setInput(prev => prev ? `${prev} ${text}` : text);
       setVoiceError('');
     },
     onError: (error) => {
       setVoiceError(error);
-      setTimeout(() => setVoiceError(''), 10000); // Clear error after 10 seconds
+      setTimeout(() => setVoiceError(''), 10000);
     }
   });
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const filteredMessages = useMemo(() => 
+    messages
+      .filter(msg => messageFilters.includes(msg.type))
+      .sort((a, b) => a.timestamp - b.timestamp),
+    [messages, messageFilters]
+  );
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const handleSend = () => {
+  const isSendingRef = useRef(false);
+  
+  const handleSend = useCallback(() => {
     if (input.trim() && !disabled && !processing) {
-      // Add file references to the message
+      // Prevent double-sending
+      if (isSendingRef.current) {
+        console.warn('Already sending message, ignoring duplicate send');
+        return;
+      }
+      
+      isSendingRef.current = true;
+      
       let messageWithFiles = input;
       if (selectedFiles.length > 0) {
         const fileRefs = selectedFiles.map(f => `@${f}`).join(' ');
         messageWithFiles = `${fileRefs} ${input}`;
       }
+      console.log('ChatInterface handleSend:', messageWithFiles);
       onSendMessage(messageWithFiles);
       setInput('');
       onClearFiles?.();
+      
+      // Reset the flag after a short delay
+      setTimeout(() => {
+        isSendingRef.current = false;
+      }, 500);
     }
-  };
+  }, [input, disabled, processing, selectedFiles, onSendMessage, onClearFiles]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-    // Shift+Enter will naturally create a new line
-  };
+  }, [handleSend]);
 
-  const handleFilterChange = (_event: React.MouseEvent<HTMLElement>, newFilters: string[]) => {
+  const handleFilterChange = useCallback((_event: React.MouseEvent<HTMLElement>, newFilters: string[]) => {
     if (newFilters.length > 0) {
       setMessageFilters(newFilters);
     }
-  };
+  }, []);
 
-  const filteredMessages = messages
-    .filter(msg => messageFilters.includes(msg.type))
-    .sort((a, b) => a.timestamp - b.timestamp);
-
-  const getMessageIcon = (type: string) => {
+  const getMessageIcon = useCallback((type: string) => {
     switch(type) {
       case 'user': return <PersonIcon color="primary" />;
       case 'assistant': return <BotIcon color="secondary" />;
@@ -106,9 +256,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
       case 'tool_result': return <CodeIcon sx={{ color: '#00aaff' }} />;
       default: return <BotIcon color="secondary" />;
     }
-  };
+  }, []);
 
-  const getMessageColor = (type: string) => {
+  const getMessageColor = useCallback((type: string) => {
     switch(type) {
       case 'user': return 'rgba(0, 255, 255, 0.05)';
       case 'assistant': return 'rgba(255, 0, 255, 0.03)';
@@ -117,9 +267,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
       case 'tool_result': return 'rgba(0, 170, 255, 0.03)';
       default: return 'rgba(255, 0, 255, 0.03)';
     }
-  };
+  }, []);
 
-  const getMessageBorder = (type: string) => {
+  const getMessageBorder = useCallback((type: string) => {
     switch(type) {
       case 'user': return '1px solid rgba(0, 255, 255, 0.2)';
       case 'assistant': return '1px solid rgba(255, 0, 255, 0.15)';
@@ -128,7 +278,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
       case 'tool_result': return '1px solid rgba(0, 170, 255, 0.15)';
       default: return '1px solid rgba(255, 0, 255, 0.15)';
     }
-  };
+  }, []);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#000000' }}>
@@ -192,94 +342,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
       </Box>
       
       <Box sx={{ flexGrow: 1, overflow: 'auto', p: 2 }}>
-        <List>
-          {filteredMessages.map((message) => (
-            <ListItem
-              key={message.id}
-              sx={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                mb: 2,
-                flexDirection: message.type === 'user' ? 'row-reverse' : 'row'
-              }}
-            >
-              <Box
-                sx={{
-                  mr: message.type === 'user' ? 0 : 1,
-                  ml: message.type === 'user' ? 1 : 0
-                }}
-              >
-                {getMessageIcon(message.type)}
-              </Box>
-              <Paper
-                elevation={1}
-                sx={{
-                  p: 2,
-                  maxWidth: '70%',
-                  backgroundColor: getMessageColor(message.type),
-                  border: getMessageBorder(message.type),
-                  boxShadow: message.type === 'user' ? '0 0 20px rgba(0, 255, 255, 0.1)' : '0 0 20px rgba(255, 0, 255, 0.08)'
-                }}
-              >
-                <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <Chip
-                    label={
-                      message.type === 'user' ? 'You' : 
-                      message.type === 'assistant' ? 'Claude' :
-                      message.type === 'thinking' ? 'Thinking' :
-                      message.type === 'tool_use' ? `Tool: ${message.tool_name || 'Unknown'}` :
-                      message.type === 'tool_result' ? 'Result' :
-                      message.type
-                    }
-                    size="small"
-                    color={message.type === 'user' ? 'primary' : 'secondary'}
-                  />
-                  <Typography variant="caption" color="text.secondary">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </Typography>
-                  {message.tokens && (
-                    <Typography variant="caption" color="text.secondary">
-                      • {message.tokens} tokens
-                    </Typography>
-                  )}
-                </Box>
-                <ReactMarkdown
-                  components={{
-                    code({ inline, className, children, ...props }: any) {
-                      const match = /language-(\w+)/.exec(className || '');
-                      return !inline && match ? (
-                        <SyntaxHighlighter
-                          style={vscDarkPlus}
-                          language={match[1]}
-                          PreTag="div"
-                          {...props}
-                        >
-                          {String(children).replace(/\n$/, '')}
-                        </SyntaxHighlighter>
-                      ) : (
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
-                      );
-                    }
-                  }}
-                >
-                  {message.content}
-                </ReactMarkdown>
-              </Paper>
-            </ListItem>
-          ))}
-          {processing && (
-            <ListItem sx={{ display: 'flex', alignItems: 'center' }}>
-              <BotIcon color="secondary" sx={{ mr: 1 }} />
-              <CircularProgress size={20} />
-              <Typography variant="body2" sx={{ ml: 1 }} color="text.secondary">
-                Claude is thinking...
-              </Typography>
-            </ListItem>
-          )}
-        </List>
-        <div ref={messagesEndRef} />
+        <MessagesList
+          messages={filteredMessages}
+          processing={processing}
+          getMessageIcon={getMessageIcon}
+          getMessageColor={getMessageColor}
+          getMessageBorder={getMessageBorder}
+        />
       </Box>
       
       <Box sx={{ p: 2, borderTop: '1px solid rgba(0,255,255,0.15)', backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -291,9 +360,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
                 label={`@${file.split('/').pop()}`}
                 size="small"
                 onDelete={() => {
-                  // const newFiles = selectedFiles.filter(f => f !== file);
                   onClearFiles?.();
-                  // Need to pass newFiles back to parent
                 }}
                 color="primary"
                 variant="outlined"
@@ -318,44 +385,42 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
             sx={{
               '& .MuiInputBase-input': {
                 minHeight: '40px',
+              },
+              '& .MuiInputBase-root': {
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                '&:hover': {
+                  backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                },
+                '&.Mui-focused': {
+                  backgroundColor: 'rgba(0, 0, 0, 0.9)',
+                }
               }
             }}
           />
-          {voiceEnabled && (
-            <Tooltip title={
-              isRecording ? 'Stop recording' : 
-              isTranscribing ? 'Transcribing...' : 
-              'Start voice input'
-            }>
+          <Tooltip title={
+            !voiceEnabled ? "Voice input not available (requires HTTPS)" :
+            isRecording ? "Stop recording" :
+            isTranscribing ? "Transcribing..." :
+            "Start recording"
+          }>
+            <span>
               <IconButton
-                color={isRecording ? 'error' : 'primary'}
                 onClick={toggleRecording}
-                disabled={disabled || processing || isTranscribing}
+                disabled={!voiceEnabled || disabled || processing || isTranscribing}
+                color={isRecording ? "error" : "default"}
                 sx={{
-                  animation: isRecording ? 'pulse 1.5s infinite' : 'none',
-                  '@keyframes pulse': {
-                    '0%': { opacity: 1 },
-                    '50%': { opacity: 0.5 },
-                    '100%': { opacity: 1 }
-                  }
+                  backgroundColor: isRecording ? 'rgba(255, 0, 0, 0.1)' : 'transparent',
+                  '&:hover': {
+                    backgroundColor: isRecording ? 'rgba(255, 0, 0, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                  },
                 }}
               >
-                {isTranscribing ? (
-                  <CircularProgress size={24} />
-                ) : isRecording ? (
-                  <StopIcon />
-                ) : (
-                  <MicIcon />
-                )}
+                {isRecording ? <StopIcon /> : isTranscribing ? <CircularProgress size={20} /> : voiceEnabled ? <MicIcon /> : <MicOffIcon />}
               </IconButton>
-            </Tooltip>
-          )}
-          <IconButton
-            color="primary"
-            onClick={handleSend}
-            disabled={disabled || processing || !input.trim()}
-          >
-            <SendIcon />
+            </span>
+          </Tooltip>
+          <IconButton onClick={handleSend} disabled={disabled || processing || !input.trim()}>
+            {processing ? <CircularProgress size={20} /> : <SendIcon />}
           </IconButton>
         </Box>
       </Box>

@@ -14,12 +14,18 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3001;
+const wsPort = process.env.WS_PORT || 3002; // Separate WebSocket port
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increase limit for JSON session uploads
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+
+// Create a separate WebSocket server on a different port, bound to 127.0.0.1
+const wss = new WebSocketServer({ 
+  port: wsPort,
+  host: '127.0.0.1' // Explicitly bind to loopback address
+});
 
 const claudeManager = new ClaudeCodeManager();
 const hookServer = new HookServer(claudeManager);
@@ -164,6 +170,16 @@ claudeManager.on('token-usage', (data) => {
   });
 });
 
+claudeManager.on('session-id-changed', (data) => {
+  wss.clients.forEach((client) => {
+    if (client.readyState === client.OPEN) {
+      client.send(JSON.stringify({
+        type: 'session-id-changed',
+        data
+      }));
+    }
+  });
+});
 
 hookServer.on('hook-event', (event) => {
   wss.clients.forEach((client) => {
@@ -176,18 +192,28 @@ hookServer.on('hook-event', (event) => {
   });
 });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws: any) => {
   logger.info('New WebSocket connection established');
+  
+  // Set up ping-pong keepalive
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
 
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message.toString());
       
       switch (data.type) {
+        case 'ping':
+          // Respond to client ping
+          ws.send(JSON.stringify({ type: 'pong' }));
+          break;
         case 'start-session':
           try {
-            logger.info(`Starting session with directory: ${data.workingDirectory}`);
-            await claudeManager.startSession(data.workingDirectory);
+            logger.info(`Starting session with directory: ${data.workingDirectory}${data.sessionId ? `, existing session: ${data.sessionId}` : ''}`);
+            await claudeManager.startSession(data.workingDirectory, data.sessionId);
             logger.info(`Session started with ID: ${claudeManager.sessionId}`);
             ws.send(JSON.stringify({
               type: 'session-started',
@@ -205,7 +231,7 @@ wss.on('connection', (ws) => {
           break;
           
         case 'send-prompt':
-          logger.info(`Sending prompt, session ID: ${claudeManager.sessionId}`);
+          logger.info(`Received send-prompt request, session ID: ${claudeManager.sessionId}, prompt: "${data.prompt?.substring(0, 50)}..."`);
           try {
             claudeManager.sendPrompt(data.prompt);
           } catch (error: any) {
@@ -242,7 +268,35 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     logger.info('WebSocket connection closed');
+    ws.isAlive = false;
   });
+  
+  ws.on('error', (error: Error) => {
+    logger.error('WebSocket error:', error);
+  });
+});
+
+// Set up periodic ping to keep connections alive
+const pingInterval = setInterval(() => {
+  wss.clients.forEach((ws: any) => {
+    if (ws.readyState !== ws.OPEN) {
+      return; // Skip closed connections
+    }
+    
+    if (ws.isAlive === false) {
+      logger.info('Terminating inactive WebSocket connection');
+      return ws.terminate();
+    }
+    
+    ws.isAlive = false;
+    ws.ping(() => {
+      // Ping callback - called if ping fails
+    });
+  });
+}, 30000); // Ping every 30 seconds
+
+wss.on('close', () => {
+  clearInterval(pingInterval);
 });
 
 app.get('/health', (_req, res) => {
@@ -301,10 +355,46 @@ app.get('/api/session-history', async (req, res) => {
     const sessionFiles = files.filter(f => f.startsWith('session-') && f.endsWith('.json'));
     
     if (sessionId) {
-      // Load specific session
-      const sessionFile = `session-${sessionId}.json`;
+      // Load specific session - try both direct filename and search by Claude session ID
+      let sessionFile = `session-${sessionId}.json`;
+      let foundFile: string | null = null;
+      
       if (sessionFiles.includes(sessionFile)) {
-        const content = await fs.readFile(path.join(logDir, sessionFile), 'utf-8');
+        foundFile = sessionFile;
+      } else {
+        // Search through files to find one with matching Claude session ID
+        for (const file of sessionFiles) {
+          try {
+            const content = await fs.readFile(path.join(logDir, file), 'utf-8');
+            const lines = content.split('\n').filter(line => line.trim());
+            
+            for (const line of lines) {
+              try {
+                const entry = JSON.parse(line);
+                if (entry.raw) {
+                  const rawData = JSON.parse(entry.raw);
+                  if (rawData.type === 'system' && rawData.subtype === 'init' && rawData.session_id === sessionId) {
+                    foundFile = file;
+                    break;
+                  }
+                }
+                if (entry.parsed?.session_id === sessionId) {
+                  foundFile = file;
+                  break;
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+            if (foundFile) break;
+          } catch {
+            // Ignore file read errors
+          }
+        }
+      }
+      
+      if (foundFile) {
+        const content = await fs.readFile(path.join(logDir, foundFile), 'utf-8');
         const lines = content.split('\n').filter(line => line.trim());
         const messages = lines.map(line => {
           try {
@@ -321,7 +411,7 @@ app.get('/api/session-history', async (req, res) => {
     } else {
       // List available sessions with metadata
       const sessions = await Promise.all(sessionFiles.map(async (file) => {
-        const sessionId = file.replace('session-', '').replace('.json', '');
+        const fileSessionId = file.replace('session-', '').replace('.json', '');
         try {
           const content = await fs.readFile(path.join(logDir, file), 'utf-8');
           const lines = content.split('\n').filter(line => line.trim());
@@ -331,6 +421,7 @@ app.get('/api/session-history', async (req, res) => {
           let lastTimestamp: number | null = null;
           let messageCount = 0;
           let lastUserPrompt = '';
+          let claudeSessionId: string | null = null;
           
           lines.forEach(line => {
             try {
@@ -340,6 +431,23 @@ app.get('/api/session-history', async (req, res) => {
                 if (!firstTimestamp || ts < firstTimestamp) firstTimestamp = ts;
                 if (!lastTimestamp || ts > lastTimestamp) lastTimestamp = ts;
               }
+              
+              // Extract Claude's actual session ID from init message
+              if (entry.raw) {
+                try {
+                  const rawData = JSON.parse(entry.raw);
+                  if (rawData.type === 'system' && rawData.subtype === 'init' && rawData.session_id) {
+                    claudeSessionId = rawData.session_id;
+                  }
+                } catch {
+                  // Ignore parse errors
+                }
+              }
+              // Also check parsed messages for session_id
+              else if (entry.parsed?.type === 'system' && entry.parsed?.subtype === 'init' && entry.parsed?.session_id) {
+                claudeSessionId = entry.parsed.session_id;
+              }
+              
               // Count our custom user prompt logging
               if (entry.type === 'user' && entry.prompt) {
                 messageCount++;
@@ -357,8 +465,13 @@ app.get('/api/session-history', async (req, res) => {
             }
           });
           
+          // Use Claude's session ID if found, otherwise fall back to filename ID
+          const sessionId = claudeSessionId || fileSessionId;
+          
           return {
             id: sessionId,
+            claudeSessionId,
+            fileSessionId,
             firstTimestamp,
             lastTimestamp,
             messageCount,
@@ -366,7 +479,9 @@ app.get('/api/session-history', async (req, res) => {
           };
         } catch {
           return {
-            id: sessionId,
+            id: fileSessionId,
+            claudeSessionId: null,
+            fileSessionId,
             firstTimestamp: null,
             lastTimestamp: null,
             messageCount: 0,
@@ -397,6 +512,7 @@ app.use('/api/voice', voiceRouter);
 
 server.listen(port, () => {
   logger.info(`Claude Code Web UI backend running on port ${port}`);
+  logger.info(`WebSocket server running on port ${wsPort}`);
   hookServer.start();
 });
 

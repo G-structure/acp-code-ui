@@ -11,6 +11,8 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}) {
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const isProcessingRef = useRef(false);
+  const recordingStartTimeRef = useRef<number>(0);
 
   // Check if voice input is available on mount
   useEffect(() => {
@@ -29,6 +31,11 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}) {
   };
 
   const startRecording = async () => {
+    // Prevent starting if already processing
+    if (isProcessingRef.current || isRecording || isTranscribing) {
+      return;
+    }
+
     try {
       // Check if browser supports getUserMedia
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -60,15 +67,23 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}) {
       };
 
       mediaRecorder.onstop = async () => {
+        // Prevent duplicate processing
+        if (isProcessingRef.current) {
+          return;
+        }
+        isProcessingRef.current = true;
+
         const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
         await transcribeAudio(audioBlob);
         
         // Clean up stream
         stream.getTracks().forEach(track => track.stop());
+        isProcessingRef.current = false;
       };
 
       mediaRecorder.start();
       setIsRecording(true);
+      recordingStartTimeRef.current = Date.now();
     } catch (error: any) {
       console.error('Failed to start recording:', error);
       
@@ -98,8 +113,19 @@ export function useVoiceInput(options: UseVoiceInputOptions = {}) {
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
+      // Check minimum recording duration (0.5 seconds)
+      const recordingDuration = Date.now() - recordingStartTimeRef.current;
+      if (recordingDuration < 500) {
+        options.onError?.('Recording too short. Please record for at least half a second.');
+        // Still stop the recording but don't transcribe
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+        isProcessingRef.current = true; // Prevent transcription
+        setTimeout(() => { isProcessingRef.current = false; }, 100);
+      } else {
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+      }
     }
   };
 

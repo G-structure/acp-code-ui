@@ -13,6 +13,7 @@ interface ClaudeCodeOptions {
 
 export class ClaudeCodeManager extends EventEmitter {
   public baseSessionId: string | null = null;  // Base session ID for the UI session
+  private claudeSessionId: string | null = null;  // Claude's actual session ID from init message
   private messageCount: number = 0;  // Track message count for unique IDs
   private isProcessing: boolean = false;
   private workingDirectory: string = process.cwd();
@@ -28,15 +29,23 @@ export class ClaudeCodeManager extends EventEmitter {
     };
   }
 
-  async startSession(workingDirectory?: string): Promise<void> {
+  async startSession(workingDirectory?: string, existingSessionId?: string): Promise<void> {
     // Sessions are now implicit - just set up the working directory
-    if (!this.baseSessionId) {
+    if (existingSessionId) {
+      // Resuming an existing Claude session
+      this.claudeSessionId = existingSessionId;
+      this.baseSessionId = existingSessionId;
+      this.messageCount = 1; // We'll be resuming, not starting fresh
+      logger.info(`Resuming Claude session ${existingSessionId}`);
+    } else if (!this.baseSessionId) {
+      // New session - generate temporary ID that Claude will replace
       this.baseSessionId = uuidv4();
       this.messageCount = 0;
+      this.claudeSessionId = null; // Will be set when we get init message
     }
     this.workingDirectory = workingDirectory || process.cwd();
     
-    logger.info(`Claude Code ready with base session ${this.baseSessionId} in directory: ${this.workingDirectory}`);
+    logger.info(`Claude Code ready with session ${this.baseSessionId} in directory: ${this.workingDirectory}`);
     
     // Always ready since we spawn per message
     this.emit('session-started', { sessionId: this.baseSessionId });
@@ -72,6 +81,8 @@ export class ClaudeCodeManager extends EventEmitter {
     this.isProcessing = true;
     this.messageCount++;
     
+    logger.info(`Processing prompt ${this.messageCount} for session ${this.baseSessionId}: "${prompt.substring(0, 50)}..."`);
+    
     // Log the user prompt for session history
     this.logJsonDebug({
       type: 'user',
@@ -90,7 +101,9 @@ export class ClaudeCodeManager extends EventEmitter {
       const logDir = path.join(this.workingDirectory, '.claude-debug');
       await fs.mkdir(logDir, { recursive: true });
       
-      const logFile = path.join(logDir, `session-${this.baseSessionId}.json`);
+      // Use Claude's session ID for the log file if available
+      const sessionForLog = this.claudeSessionId || this.baseSessionId;
+      const logFile = path.join(logDir, `session-${sessionForLog}.json`);
       const timestamp = new Date().toISOString();
       const logEntry = JSON.stringify({ timestamp, ...data }) + '\n';
       
@@ -112,7 +125,9 @@ export class ClaudeCodeManager extends EventEmitter {
       }
     }
     
-    logger.info(`Using session ID: ${this.baseSessionId} (message ${this.messageCount})`);
+    // Use Claude's session ID if we have it, otherwise use our temporary one
+    const sessionToUse = this.claudeSessionId || this.baseSessionId;
+    logger.info(`Using session ID: ${sessionToUse} (message ${this.messageCount}, claudeSessionId: ${this.claudeSessionId})`);
     
     // Build args based on whether this is the first message or not
     const args = [
@@ -122,13 +137,13 @@ export class ClaudeCodeManager extends EventEmitter {
       '--dangerously-skip-permissions'
     ];
     
-    if (this.messageCount === 1) {
-      // First message: create new session
-      args.push('--session-id', this.baseSessionId!);
-    } else {
-      // Subsequent messages: resume existing session
-      args.push('--resume', this.baseSessionId!);
+    // Always use --session-id with the specific session ID
+    // Claude will create a new session if it doesn't exist, or resume if it does
+    if (sessionToUse) {
+      args.push('--session-id', sessionToUse);
     }
+    // Note: We never use --resume because it doesn't allow specifying which session
+    // and could resume the wrong session when working with multiple sessions
     
     args.push(prompt);  // The prompt as argument
     
@@ -187,11 +202,31 @@ export class ClaudeCodeManager extends EventEmitter {
               case 'system':
                 if (message.subtype === 'init') {
                   logger.debug('Received init message');
+                  
+                  // Capture Claude's actual session ID
+                  if (message.session_id && message.session_id !== this.claudeSessionId) {
+                    logger.info(`Received Claude session ID: ${message.session_id} (was: ${this.claudeSessionId})`);
+                    this.claudeSessionId = message.session_id;
+                    
+                    // Update our base session ID if it was temporary
+                    if (this.baseSessionId !== message.session_id) {
+                      logger.info(`Updating base session ID from ${this.baseSessionId} to ${message.session_id}`);
+                      this.baseSessionId = message.session_id;
+                      
+                      // Emit updated session ID
+                      this.emit('session-id-changed', { 
+                        oldId: this.baseSessionId, 
+                        newId: message.session_id 
+                      });
+                    }
+                  }
+                  
                   // Emit tool/model info if needed
                   this.emit('system-info', {
                     model: message.model,
                     tools: message.tools,
-                    cwd: message.cwd
+                    cwd: message.cwd,
+                    sessionId: message.session_id
                   });
                 } else if (message.subtype === 'usage') {
                   // Emit token usage info
@@ -420,6 +455,7 @@ export class ClaudeCodeManager extends EventEmitter {
 
   private cleanup(): void {
     this.baseSessionId = null;
+    this.claudeSessionId = null;
     this.messageCount = 0;
     this.isProcessing = false;
     this.currentProcess = null;

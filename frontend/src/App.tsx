@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   Box,
   AppBar,
@@ -17,6 +17,7 @@ import {
   Autocomplete,
   Menu,
   MenuItem,
+  CircularProgress,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -31,6 +32,7 @@ import ChatInterface from './components/ChatInterface';
 import HookEventMonitor from './components/HookEventMonitor';
 import JsonDebugViewer from './components/JsonDebugViewer';
 import TodoPanel from './components/TodoPanel';
+import ResizablePanel from './components/ResizablePanel';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useClaudeStore } from './store/claudeStore';
 
@@ -40,8 +42,17 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [selectedTab, setSelectedTab] = useState<'chat' | 'terminal' | 'hooks' | 'json'>('chat');
   const [workingDirectory, setWorkingDirectory] = useState('');
-  const defaultDir = window.location.pathname.startsWith('/home') ? window.location.pathname : '/tmp';
-  const [directoryInput, setDirectoryInput] = useState(defaultDir);
+  
+  // Get directory from URL hash or use default
+  const getInitialDirectory = () => {
+    const hash = window.location.hash.slice(1); // Remove the #
+    if (hash && hash.startsWith('/')) {
+      return decodeURIComponent(hash);
+    }
+    return window.location.pathname.startsWith('/home') ? window.location.pathname : '/tmp';
+  };
+  
+  const [directoryInput, setDirectoryInput] = useState(getInitialDirectory());
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [availableSessions, setAvailableSessions] = useState<any[]>([]);
   const [directoryHistory, setDirectoryHistory] = useState<string[]>([]);
@@ -49,13 +60,45 @@ function App() {
   const [directorySelectionMode, setDirectorySelectionMode] = useState(false);
   const directoryTimeout = useRef<NodeJS.Timeout>();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasStartedSession = useRef(false);
   
-  const { isConnected, sendMessage } = useWebSocket();
-  const { sessionActive, startSession, sendPrompt, clearMessages, activeSessionId, updateSessionMessages } = useClaudeStore();
+  const { isConnected, sendMessage } = useWebSocket(() => {
+    // Refresh sessions list when Claude is ready (finished processing)
+    if (workingDirectory) {
+      loadAvailableSessions(workingDirectory);
+    }
+  });
+  const { sessionActive, startSession, sendPrompt, clearMessages, activeSessionId, updateSessionMessages, sessions } = useClaudeStore();
   
-  // Load directory history on mount
+  // Load directory from URL and history on mount
   useEffect(() => {
     loadDirectoryHistory();
+    
+    // Check if we should auto-start with the URL directory
+    const hashDir = window.location.hash.slice(1);
+    if (hashDir && hashDir.startsWith('/')) {
+      const decodedDir = decodeURIComponent(hashDir);
+      setDirectoryInput(decodedDir);
+      setWorkingDirectory(decodedDir);
+      // Save to history and load sessions
+      saveDirectoryToHistory(decodedDir);
+      loadAvailableSessions(decodedDir);
+    }
+    
+    // Listen for hash changes (e.g., back/forward navigation)
+    const handleHashChange = () => {
+      const newHash = window.location.hash.slice(1);
+      if (newHash && newHash.startsWith('/')) {
+        const decodedDir = decodeURIComponent(newHash);
+        setDirectoryInput(decodedDir);
+        setWorkingDirectory(decodedDir);
+        saveDirectoryToHistory(decodedDir);
+        loadAvailableSessions(decodedDir);
+      }
+    };
+    
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
   
   const loadDirectoryHistory = async () => {
@@ -91,7 +134,11 @@ function App() {
     
     // Set new timeout to update working directory after user stops typing
     directoryTimeout.current = setTimeout(() => {
+      // Reset the session started flag when changing directories
+      hasStartedSession.current = false;
       setWorkingDirectory(value);
+      // Update URL hash with the new directory
+      window.location.hash = encodeURIComponent(value);
       // Save to history
       saveDirectoryToHistory(value);
       // Load available sessions for this directory
@@ -167,10 +214,18 @@ function App() {
           }
         });
         
-        // Switch to this session
-        const { switchSession, updateSessionMessages } = useClaudeStore.getState();
+        // Switch to this session and mark it as active WITHOUT clearing messages
+        const { switchSession, updateSessionMessages, setSessionActive } = useClaudeStore.getState();
         switchSession(sessionId);
         updateSessionMessages(sessionId, messages);
+        setSessionActive(true); // Mark session as active without clearing
+        
+        // Tell backend to resume this specific Claude session
+        sendMessage({
+          type: 'start-session',
+          workingDirectory: workingDirectory,
+          sessionId: sessionId  // Pass the Claude session ID to resume
+        });
       }
     } catch (error) {
       console.error('Failed to load session history:', error);
@@ -179,22 +234,64 @@ function App() {
 
   // Auto-start session when connected and directory is set
   useEffect(() => {
-    if (isConnected && !sessionActive && workingDirectory) {
+    // Skip if not connected or no working directory
+    if (!isConnected || !workingDirectory) return;
+    
+    // Skip if we've already started a session
+    if (hasStartedSession.current) return;
+    
+    if (!sessionActive && !activeSessionId) {
+      // Start new session if we don't have one - but with proper UUID
+      console.log('Auto-starting new session for directory:', workingDirectory);
+      
+      // Generate a proper UUID v4
+      const newSessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+      
+      hasStartedSession.current = true;
+      const { createSession } = useClaudeStore.getState();
+      createSession(newSessionId);
       startSession(workingDirectory);
       sendMessage({
         type: 'start-session',
-        workingDirectory: workingDirectory
+        workingDirectory: workingDirectory,
+        sessionId: newSessionId
+      });
+      
+      // Refresh sessions after a delay
+      setTimeout(() => {
+        loadAvailableSessions(workingDirectory);
+      }, 1000);
+    } else if (sessionActive && activeSessionId) {
+      // Re-establish existing session after reconnection
+      console.log('Re-establishing session:', activeSessionId);
+      hasStartedSession.current = true;
+      sendMessage({
+        type: 'start-session',
+        workingDirectory: workingDirectory,
+        sessionId: activeSessionId
       });
     }
-  }, [isConnected, sessionActive, workingDirectory]);
+  }, [isConnected, workingDirectory, sessionActive, activeSessionId]); // Depend on all relevant state
   
-  const handleSendPrompt = (prompt: string) => {
+  const handleSendPrompt = useCallback((prompt: string) => {
+    console.log('handleSendPrompt called with:', prompt);
     sendPrompt(prompt);
     sendMessage({
       type: 'send-prompt',
       prompt
     });
-  };
+    
+    // Refresh sessions list after sending a message to update timestamps
+    if (workingDirectory) {
+      setTimeout(() => {
+        loadAvailableSessions(workingDirectory);
+      }, 1000);
+    }
+  }, [sendPrompt, sendMessage, workingDirectory]);
   
   const handleLoadJsonSession = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -268,31 +365,73 @@ function App() {
           
           {/* Session Tabs */}
           {workingDirectory && (
-            <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+            <Box sx={{ 
+              flexGrow: 1, 
+              display: 'flex', 
+              alignItems: 'center',
+              minWidth: 0, // Allow shrinking
+              overflow: 'hidden', // Prevent overflow
+              mx: 2 // Add margin for spacing
+            }}>
               <Tabs
-                value={activeSessionId || false}
+                value={availableSessions.some(s => s.id === activeSessionId) ? activeSessionId : (availableSessions.length > 0 ? availableSessions[0].id : false)}
                 onChange={(_, value) => {
                   if (value === 'new') {
-                    const newSessionId = `session-${Date.now()}`;
-                    const { createSession } = useClaudeStore.getState();
+                    // Generate a proper UUID v4
+                    const newSessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                      const r = Math.random() * 16 | 0;
+                      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                      return v.toString(16);
+                    });
+                    console.log('Creating new session with UUID:', newSessionId);
+                    const { createSession, startSession } = useClaudeStore.getState();
                     createSession(newSessionId);
+                    startSession(workingDirectory);
+                    
+                    // Start the session in the backend
+                    sendMessage({
+                      type: 'start-session',
+                      workingDirectory: workingDirectory,
+                      sessionId: newSessionId
+                    });
+                    
+                    hasStartedSession.current = true; // Mark as started to prevent auto-start
+                    
+                    // Refresh sessions list after a delay
+                    setTimeout(() => {
+                      loadAvailableSessions(workingDirectory);
+                    }, 1000);
                   } else if (value) {
                     loadSessionHistory(value);
+                    hasStartedSession.current = true; // Mark as started when loading existing session
                   }
                 }}
                 variant="scrollable"
-                scrollButtons="auto"
+                scrollButtons
+                allowScrollButtonsMobile
                 sx={{
+                  width: '100%',
+                  '& .MuiTabs-scroller': {
+                    overflow: 'hidden !important', // Hide scrollbar
+                  },
                   '& .MuiTabs-indicator': {
                     backgroundColor: '#00ffff',
                     height: 2,
                     boxShadow: '0 0 10px #00ffff',
                   },
+                  '& .MuiTabs-scrollButtons': {
+                    color: '#00ffff',
+                    '&.Mui-disabled': {
+                      opacity: 0.3,
+                    },
+                  },
                   '& .MuiTab-root': {
                     textTransform: 'none',
                     minHeight: 40,
-                    minWidth: 120,
-                    fontSize: '0.875rem',
+                    minWidth: 100,
+                    maxWidth: 150,
+                    fontSize: '0.85rem',
+                    padding: '6px 12px',
                     color: 'text.secondary',
                     borderRight: '1px solid rgba(0, 255, 255, 0.15)',
                     '&.Mui-selected': {
@@ -303,23 +442,79 @@ function App() {
                   },
                 }}
               >
-                {availableSessions.map(session => {
+                {availableSessions
+                  .sort((a, b) => {
+                    // Sort by last timestamp, newest first (descending)
+                    const timeA = a.lastTimestamp ? new Date(a.lastTimestamp).getTime() : 0;
+                    const timeB = b.lastTimestamp ? new Date(b.lastTimestamp).getTime() : 0;
+                    return timeB - timeA;
+                  })
+                  .map(session => {
                   const lastTime = session.lastTimestamp 
                     ? new Date(session.lastTimestamp).toLocaleTimeString('en-US', {
                         hour: '2-digit',
                         minute: '2-digit'
                       })
                     : '';
+                  // Use Claude's session ID as the display name and value
+                  const displayId = session.claudeSessionId || session.id;
+                  const truncatedId = displayId.length > 12 ? 
+                    `${displayId.substring(0, 6)}...${displayId.substring(displayId.length - 4)}` : 
+                    displayId.substring(0, 12);
+                  
+                  // Check if this session is processing
+                  const isProcessing = sessions[session.id]?.processing || false;
+                  
                   return (
                     <Tab
                       key={session.id}
                       value={session.id}
                       label={
-                        <Box sx={{ textAlign: 'left' }}>
-                          <Typography variant="body2">
-                            {session.id.substring(0, 8)}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                        <Box sx={{ 
+                          display: 'flex', 
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
+                          py: 0.5
+                        }}>
+                          <Box sx={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 0.5,
+                            width: '100%'
+                          }}>
+                            <Typography 
+                              variant="caption" 
+                              title={displayId}
+                              sx={{ 
+                                fontWeight: 500,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {truncatedId}
+                            </Typography>
+                            {isProcessing && (
+                              <CircularProgress 
+                                size={8} 
+                                thickness={6}
+                                sx={{ 
+                                  color: '#00ffff',
+                                  flexShrink: 0
+                                }}
+                              />
+                            )}
+                          </Box>
+                          <Typography 
+                            variant="caption" 
+                            sx={{ 
+                              fontSize: '0.65rem',
+                              opacity: 0.7,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
                             {lastTime} • {session.messageCount || 0} msgs
                           </Typography>
                         </Box>
@@ -456,26 +651,31 @@ function App() {
             <Divider />
           </Box>
           
-          <Box sx={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
-            <FileExplorer 
-              rootPath={workingDirectory || (directorySelectionMode ? (directoryInput || '/home') : '/home')}
-              mode={directorySelectionMode ? 'directories' : 'files'}
-              onFileSelect={(path) => {
-                // Add @file reference to selected files
-                if (!selectedFiles.includes(path)) {
-                  setSelectedFiles([...selectedFiles, path]);
-                }
-              }}
-              onDirectorySelect={(path) => {
-                setDirectoryInput(path);
-                // Don't auto-start, let user click Select
-              }}
-            />
+          <Box sx={{ flexGrow: 1, overflow: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <Box sx={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
+              <FileExplorer 
+                rootPath={workingDirectory || (directorySelectionMode ? (directoryInput || '/home') : '/home')}
+                mode={directorySelectionMode ? 'directories' : 'files'}
+                onFileSelect={(path) => {
+                  // Add @file reference to selected files
+                  if (!selectedFiles.includes(path)) {
+                    setSelectedFiles([...selectedFiles, path]);
+                  }
+                }}
+                onDirectorySelect={(path) => {
+                  setDirectoryInput(path);
+                  // Don't auto-start, let user click Select
+                }}
+              />
+            </Box>
           </Box>
           
-          <Box sx={{ flexShrink: 0, minHeight: 200, maxHeight: '50%', borderTop: '1px solid rgba(0,255,255,0.15)', p: 1, overflow: 'auto' }}>
+          <ResizablePanel
+            minHeight={150}
+            defaultHeight={250}
+          >
             <TodoPanel />
-          </Box>
+          </ResizablePanel>
         </Box>
       </Drawer>
       

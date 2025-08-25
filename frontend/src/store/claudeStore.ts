@@ -35,6 +35,7 @@ interface SessionData {
   processing: boolean;
   jsonDebugLog: any[];
   todos: TodoItem[];
+  claudeSessionId?: string;
 }
 
 interface ClaudeStore {
@@ -72,6 +73,7 @@ interface ClaudeStore {
   createSession: (sessionId: string) => void;
   updateSessionMessages: (sessionId: string, messages: Message[]) => void;
   updateTodos: (todos: TodoItem[]) => void;
+  setSessionActive: (active: boolean) => void;
 }
 
 export const useClaudeStore = create<ClaudeStore>((set) => ({
@@ -298,7 +300,21 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
     },
     
     setProcessing: (processing: boolean) => {
-      set({ processing });
+      set((state) => {
+        // Update processing state for current session
+        const updatedState: any = { processing };
+        
+        // Also update in the active session if it exists
+        if (state.activeSessionId && state.sessions[state.activeSessionId]) {
+          updatedState.sessions = { ...state.sessions };
+          updatedState.sessions[state.activeSessionId] = {
+            ...updatedState.sessions[state.activeSessionId],
+            processing
+          };
+        }
+        
+        return updatedState;
+      });
     },
     
     setSystemInfo: (info: { model?: string; tools?: string[]; cwd?: string }) => {
@@ -416,5 +432,9 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
         
         return updatedState;
       });
+    },
+    
+    setSessionActive: (active: boolean) => {
+      set({ sessionActive: active });
     }
   }));

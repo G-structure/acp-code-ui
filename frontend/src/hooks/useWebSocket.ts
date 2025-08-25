@@ -9,29 +9,55 @@ interface WebSocketMessage {
   message?: any;
 }
 
-export function useWebSocket() {
+export function useWebSocket(onReady?: () => void) {
   const [isConnected, setIsConnected] = useState(false);
   const [messages, setMessages] = useState<WebSocketMessage[]>([]);
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<NodeJS.Timeout>();
+  const pingInterval = useRef<NodeJS.Timeout>();
+  const isConnecting = useRef(false);
   const { addOutput, addHookEvent, addJsonDebug, setSessionId, setProcessing, setSystemInfo, updateTokenCount } = useClaudeStore();
 
   const connect = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
+    if (ws.current?.readyState === WebSocket.OPEN || isConnecting.current) {
+      return;
+    }
+    
+    isConnecting.current = true;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsPort = import.meta.env.VITE_WS_PORT || '3002'; // Use separate WebSocket port
+    // Use 127.0.0.1 instead of localhost to avoid potential DNS/proxy issues
+    const wsUrl = `${protocol}//127.0.0.1:${wsPort}`;
+    
+    console.log('Connecting to WebSocket at:', wsUrl);
+    
+    try {
+      ws.current = new WebSocket(wsUrl);
+    } catch (error) {
+      console.error('Failed to create WebSocket:', error);
+      isConnecting.current = false;
+      setTimeout(() => connect(), 3000);
       return;
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//localhost:3001`;
-    
-    ws.current = new WebSocket(wsUrl);
-
     ws.current.onopen = () => {
       console.log('WebSocket connected');
+      isConnecting.current = false;
       setIsConnected(true);
       if (reconnectTimeout.current) {
         clearTimeout(reconnectTimeout.current);
       }
+      
+      // Set up client-side ping interval
+      if (pingInterval.current) {
+        clearInterval(pingInterval.current);
+      }
+      pingInterval.current = setInterval(() => {
+        if (ws.current?.readyState === WebSocket.OPEN) {
+          ws.current.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 25000); // Ping every 25 seconds (slightly less than server's 30s timeout)
     };
 
     ws.current.onmessage = (event) => {
@@ -40,6 +66,10 @@ export function useWebSocket() {
         setMessages((prev) => [...prev, message]);
         
         switch (message.type) {
+          case 'pong':
+            // Server responded to our ping
+            break;
+            
           case 'system-info':
             console.log('System info:', message.data);
             setSystemInfo(message.data);
@@ -106,6 +136,10 @@ export function useWebSocket() {
           case 'ready':
             setProcessing(false);
             console.log('Claude is ready for input');
+            // Call the onReady callback if provided (with a small delay to ensure file is written)
+            if (onReady) {
+              setTimeout(onReady, 500);
+            }
             break;
             
           case 'tool-use':
@@ -148,6 +182,16 @@ export function useWebSocket() {
             }
             break;
             
+          case 'session-id-changed':
+            // Handle Claude providing its actual session ID
+            if (message.data?.newId) {
+              console.log(`Session ID updated from ${message.data.oldId} to ${message.data.newId}`);
+              setSessionId(message.data.newId);
+              // Don't switch sessions here - just update the session ID
+              // The UI should continue to use the original session ID for tabs
+            }
+            break;
+            
           case 'error':
             console.error('WebSocket error:', message.error);
             alert(`Error: ${message.error}`);
@@ -164,37 +208,76 @@ export function useWebSocket() {
 
     ws.current.onerror = (error) => {
       console.error('WebSocket error:', error);
+      isConnecting.current = false;
       setIsConnected(false);
     };
 
-    ws.current.onclose = () => {
-      console.log('WebSocket disconnected');
+    ws.current.onclose = (event) => {
+      console.log('WebSocket disconnected:', {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Code 1006 means abnormal closure (like process killed)
+      if (event.code === 1006) {
+        console.warn('WebSocket abnormally closed - likely killed by external process');
+      }
+      
+      isConnecting.current = false;
       setIsConnected(false);
       ws.current = null;
       
+      // Clear ping interval
+      if (pingInterval.current) {
+        clearInterval(pingInterval.current);
+      }
+      
+      // Don't reset app state - just reconnect
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
       reconnectTimeout.current = setTimeout(() => {
         console.log('Attempting to reconnect...');
         connect();
-      }, 3000);
+      }, 1000); // Faster reconnect for abnormal closures
     };
   }, [addOutput, addHookEvent, addJsonDebug, setSessionId, setProcessing, setSystemInfo, updateTokenCount]);
 
   useEffect(() => {
+    // Only connect once on mount
     connect();
 
     return () => {
       if (reconnectTimeout.current) {
         clearTimeout(reconnectTimeout.current);
       }
+      if (pingInterval.current) {
+        clearInterval(pingInterval.current);
+      }
       if (ws.current) {
         ws.current.close();
       }
     };
-  }, [connect]);
+  }, []); // Empty dependency array - only run once on mount
 
+  const lastSendTime = useRef<number>(0);
+  
   const sendMessage = useCallback((message: any) => {
+    // Add debouncing for send-prompt messages
+    if (message.type === 'send-prompt') {
+      const now = Date.now();
+      if (now - lastSendTime.current < 500) {
+        console.warn('Ignoring rapid send-prompt, last send was', now - lastSendTime.current, 'ms ago');
+        return;
+      }
+      lastSendTime.current = now;
+    }
+    
     const attemptSend = () => {
       if (ws.current?.readyState === WebSocket.OPEN) {
+        console.log('Sending WebSocket message:', message.type, message.prompt?.substring(0, 50));
         ws.current.send(JSON.stringify(message));
         return true;
       }
