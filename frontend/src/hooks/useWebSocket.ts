@@ -192,6 +192,19 @@ export function useWebSocket(onReady?: () => void) {
             }
             break;
             
+          case 'process-stopped':
+            console.log('Claude process stopped');
+            setProcessing(false);
+            // Add a system message that the process was stopped
+            const { addMessage: addStopMessage } = useClaudeStore.getState();
+            addStopMessage({
+              id: `system-${Date.now()}`,
+              type: 'system',
+              content: '⚠️ Process interrupted by user',
+              timestamp: Date.now()
+            });
+            break;
+            
           case 'error':
             console.error('WebSocket error:', message.error);
             alert(`Error: ${message.error}`);
@@ -302,11 +315,21 @@ export function useWebSocket(onReady?: () => void) {
       ws.current = null;
     }
   }, []);
+  
+  const stopProcess = useCallback(() => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      console.log('Sending stop-process command');
+      ws.current.send(JSON.stringify({ type: 'stop-process' }));
+    } else {
+      console.warn('WebSocket not connected, cannot stop process');
+    }
+  }, []);
 
   return {
     isConnected,
     messages,
     sendMessage,
-    disconnect
+    disconnect,
+    stopProcess
   };
 }

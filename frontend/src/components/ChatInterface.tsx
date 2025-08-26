@@ -23,7 +23,8 @@ import {
   Code as CodeIcon,
   Mic as MicIcon,
   MicOff as MicOffIcon,
-  Stop as StopIcon
+  Stop as StopIcon,
+  StopCircle as StopCircleIcon
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -34,6 +35,7 @@ import ToolResultBlock from './ToolResultBlock';
 
 interface ChatInterfaceProps {
   onSendMessage: (message: string) => void;
+  onStopProcess?: () => void;
   disabled?: boolean;
   selectedFiles?: string[];
   onClearFiles?: () => void;
@@ -181,7 +183,7 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
 
 MessagesList.displayName = 'MessagesList';
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, selectedFiles = [], onClearFiles }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProcess, disabled, selectedFiles = [], onClearFiles }) => {
   const [input, setInput] = useState('');
   const [messageFilters, setMessageFilters] = useState<string[]>(['user', 'assistant']);
   const [voiceError, setVoiceError] = useState<string>('');
@@ -206,6 +208,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
   );
 
   const isSendingRef = useRef(false);
+
+  // ESC key handler to stop process
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && processing && onStopProcess) {
+        console.log('ESC key pressed - stopping process');
+        onStopProcess();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyPress);
+    return () => document.removeEventListener('keydown', handleKeyPress);
+  }, [processing, onStopProcess]);
   
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled && !processing) {
@@ -419,9 +434,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, disabled, 
               </IconButton>
             </span>
           </Tooltip>
-          <IconButton onClick={handleSend} disabled={disabled || processing || !input.trim()}>
-            {processing ? <CircularProgress size={20} /> : <SendIcon />}
-          </IconButton>
+          {processing ? (
+            <Tooltip title="Stop Claude (ESC)">
+              <IconButton 
+                onClick={onStopProcess} 
+                color="error"
+                sx={{
+                  backgroundColor: 'rgba(255, 0, 0, 0.1)',
+                  '&:hover': {
+                    backgroundColor: 'rgba(255, 0, 0, 0.2)',
+                  },
+                }}
+              >
+                <StopCircleIcon />
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <IconButton onClick={handleSend} disabled={disabled || !input.trim()}>
+              <SendIcon />
+            </IconButton>
+          )}
         </Box>
       </Box>
     </Box>

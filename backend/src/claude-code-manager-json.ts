@@ -12,13 +12,13 @@ interface ClaudeCodeOptions {
 }
 
 export class ClaudeCodeManager extends EventEmitter {
-  public baseSessionId: string | null = null;  // Base session ID for the UI session
-  private claudeSessionId: string | null = null;  // Claude's actual session ID from init message
+  public baseSessionId: string | null = null;  // The session ID we're using
+  private claudeSessionId: string | null = null;  // Kept for backwards compatibility
   private messageCount: number = 0;  // Track message count for unique IDs
   private isProcessing: boolean = false;
   private workingDirectory: string = process.cwd();
   private currentProcess: IPty | null = null;
-  private isExistingSession: boolean = false;  // Track if this is a resumed session
+  private isResumingExistingSession: boolean = false;  // Track if we're resuming vs creating
 
   constructor(private options: ClaudeCodeOptions = {}) {
     super();
@@ -31,42 +31,43 @@ export class ClaudeCodeManager extends EventEmitter {
   }
 
   async startSession(workingDirectory?: string, existingSessionId?: string, isNewSession: boolean = false): Promise<void> {
-    // Sessions are now implicit - just set up the working directory
+    // If we already have an active session with this ID, just update the working directory
+    if (this.baseSessionId === existingSessionId || this.claudeSessionId === existingSessionId) {
+      logger.info(`Session ${existingSessionId} already active, NOT resetting messageCount (currently ${this.messageCount})`);
+      this.workingDirectory = workingDirectory || this.workingDirectory;
+      this.emit('session-started', { sessionId: this.baseSessionId });
+      this.emit('ready');
+      return;
+    }
+    
+    // If we're switching to a different session or starting fresh
     if (existingSessionId) {
-      // Check if we're already using this session
-      if (this.baseSessionId === existingSessionId || this.claudeSessionId === existingSessionId) {
-        logger.info(`Session ${existingSessionId} already active, updating working directory`);
-        this.workingDirectory = workingDirectory || this.workingDirectory;
-        this.emit('session-started', { sessionId: this.baseSessionId });
-        this.emit('ready');
-        return;
-      }
-      
-      // Check if this is explicitly a new session or looks like a resumed one
-      // Frontend passes isNewSession=true for newly created sessions
       if (isNewSession) {
-        // This is a new session with a pre-generated UUID from frontend
-        this.claudeSessionId = null; // Will be set when Claude assigns it
+        // Brand new session - reset everything
+        this.cleanup(); // Clear any previous session state
         this.baseSessionId = existingSessionId;
         this.messageCount = 0;
-        this.isExistingSession = false; // This is a new session
-        logger.info(`Creating new session with frontend-provided ID ${existingSessionId}`);
+        this.isResumingExistingSession = false;  // This is a NEW session
+        logger.info(`Starting BRAND NEW session with ID ${existingSessionId}`);
       } else {
-        // Resuming an existing Claude session
-        this.claudeSessionId = existingSessionId;
+        // Resuming an existing session - keep the ID, reset message count
+        this.cleanup(); // Clear any previous session state  
         this.baseSessionId = existingSessionId;
-        this.messageCount = 0; // Start at 0, will increment when sending messages
-        this.isExistingSession = true; // Mark as existing session for resume
-        logger.info(`Setting up to resume existing Claude session ${existingSessionId}`);
+        this.messageCount = 0; // Will increment with each message
+        this.isResumingExistingSession = true;  // This is an EXISTING session
+        logger.info(`Switching to EXISTING session ${existingSessionId}`);
       }
     } else if (!this.baseSessionId) {
-      // New session - generate temporary ID that Claude will replace
+      // No session at all - create new one
       this.baseSessionId = uuidv4();
       this.messageCount = 0;
-      this.claudeSessionId = null; // Will be set when we get init message
-      this.isExistingSession = false; // This is a new session
+      this.isResumingExistingSession = false;  // New session
       logger.info(`Creating new session with backend-generated ID ${this.baseSessionId}`);
+    } else {
+      // We have a session but no specific ID was requested - keep current session
+      logger.info(`Keeping current session ${this.baseSessionId}, messageCount: ${this.messageCount}, resuming: ${this.isResumingExistingSession}`);
     }
+    
     this.workingDirectory = workingDirectory || process.cwd();
     
     logger.info(`Claude Code ready with session ${this.baseSessionId} in directory: ${this.workingDirectory}`);
@@ -90,6 +91,24 @@ export class ClaudeCodeManager extends EventEmitter {
       }
     }
     this.cleanup();
+  }
+  
+  async stopCurrentProcess(): Promise<void> {
+    if (this.currentProcess) {
+      try {
+        logger.info('Stopping current Claude process...');
+        this.currentProcess.kill();
+        this.isProcessing = false;
+        await new Promise(resolve => setTimeout(resolve, 100));
+        logger.info('Claude process stopped');
+        this.emit('ready');
+        this.emit('process-stopped', { reason: 'user_interrupted' });
+      } catch (error) {
+        logger.error('Error stopping current Claude process:', error);
+      }
+    } else {
+      logger.info('No active Claude process to stop');
+    }
   }
 
   sendPrompt(prompt: string): void {
@@ -149,9 +168,9 @@ export class ClaudeCodeManager extends EventEmitter {
       }
     }
     
-    // Use Claude's session ID if we have it, otherwise use our temporary one
-    const sessionToUse = this.claudeSessionId || this.baseSessionId;
-    logger.info(`Using session ID: ${sessionToUse} (message ${this.messageCount}, claudeSessionId: ${this.claudeSessionId})`);
+    // Always use our baseSessionId - it's either what we generated or what Claude gave us
+    const sessionToUse = this.baseSessionId;
+    logger.info(`Using session ID: ${sessionToUse} (message #${this.messageCount})`);
     
     // Build args based on whether this is the first message or not
     const args = [
@@ -161,17 +180,35 @@ export class ClaudeCodeManager extends EventEmitter {
       '--dangerously-skip-permissions'
     ];
     
-    // Determine if this is a new session or resuming an existing one
-    if (sessionToUse) {
-      // If this is an existing session OR we've already sent messages in this session
-      if (this.isExistingSession || this.messageCount > 1) {
-        // Use --resume for existing sessions
-        args.push('--resume', sessionToUse);
-        logger.info(`Resuming session with --resume ${sessionToUse} (isExisting: ${this.isExistingSession}, messageCount: ${this.messageCount})`);
-      } else {
-        // This is the first message in a brand new session - use --session-id
+    // Claude CLI session handling is problematic:
+    // - --session-id can only CREATE new sessions (fails if ID exists)
+    // - --resume with session ID doesn't work properly in --print mode
+    // - --continue only works for the most recent session
+    // 
+    // Strategy:
+    // - For NEW sessions: use --session-id on first message
+    // - For EXISTING sessions: always use --continue
+    // - For subsequent messages in same session: use --continue
+    
+    if (this.messageCount === 1 && !this.isResumingExistingSession) {
+      // First message of a BRAND NEW session - use --session-id
+      if (sessionToUse) {
         args.push('--session-id', sessionToUse);
-        logger.info(`Creating new session with --session-id ${sessionToUse}`);
+        logger.info(`Creating NEW session with --session-id ${sessionToUse}`);
+      } else {
+        // No ID, just create a new session without specific ID
+        logger.info('Creating new session without specific ID');
+      }
+    } else {
+      // Either:
+      // - First message of an EXISTING session (resuming)
+      // - Subsequent messages in any session
+      // Use --continue for both cases
+      args.push('--continue');
+      logger.info(`Message #${this.messageCount}: using --continue (resuming: ${this.isResumingExistingSession})`);
+      
+      if (this.messageCount === 1 && this.isResumingExistingSession) {
+        logger.warn('Note: Using --continue to resume session. This will use the most recent Claude session!');
       }
     }
     
@@ -233,21 +270,25 @@ export class ClaudeCodeManager extends EventEmitter {
                 if (message.subtype === 'init') {
                   logger.debug('Received init message');
                   
-                  // Capture Claude's actual session ID
-                  if (message.session_id && message.session_id !== this.claudeSessionId) {
-                    logger.info(`Received Claude session ID: ${message.session_id} (was: ${this.claudeSessionId})`);
-                    this.claudeSessionId = message.session_id;
+                  // Log the session ID we're using
+                  if (message.session_id) {
+                    logger.info(`Claude confirmed session ID: ${message.session_id} (our ID was: ${this.baseSessionId})`);
                     
-                    // Update our base session ID if it was temporary
-                    if (this.baseSessionId !== message.session_id) {
-                      logger.info(`Updating base session ID from ${this.baseSessionId} to ${message.session_id}`);
+                    // Only update if Claude gave us a different ID than what we requested
+                    if (message.session_id !== this.baseSessionId) {
+                      const oldId = this.baseSessionId;
+                      logger.info(`Claude changed our session ID from ${oldId} to ${message.session_id}`);
                       this.baseSessionId = message.session_id;
+                      this.claudeSessionId = message.session_id;
                       
                       // Emit updated session ID
                       this.emit('session-id-changed', { 
-                        oldId: this.baseSessionId, 
+                        oldId: oldId, 
                         newId: message.session_id 
                       });
+                    } else {
+                      // Claude accepted our ID
+                      this.claudeSessionId = message.session_id;
                     }
                   }
                   
@@ -489,7 +530,7 @@ export class ClaudeCodeManager extends EventEmitter {
     this.messageCount = 0;
     this.isProcessing = false;
     this.currentProcess = null;
-    this.isExistingSession = false;
+    this.isResumingExistingSession = false;
   }
 
   getStatus(): { active: boolean; sessionId: string | null; processing: boolean } {

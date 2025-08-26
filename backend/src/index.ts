@@ -250,6 +250,15 @@ wss.on('connection', (ws: any) => {
           }));
           break;
           
+        case 'stop-process':
+          // Stop just the current Claude process, not the whole session
+          logger.info('Received stop-process request');
+          await claudeManager.stopCurrentProcess();
+          ws.send(JSON.stringify({
+            type: 'process-stopped'
+          }));
+          break;
+          
         case 'send-command':
           claudeManager.sendCommand(data.command);
           break;

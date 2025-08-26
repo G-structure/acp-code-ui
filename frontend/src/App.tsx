@@ -62,7 +62,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasStartedSession = useRef(false);
   
-  const { isConnected, sendMessage } = useWebSocket(() => {
+  const { isConnected, sendMessage, stopProcess } = useWebSocket(() => {
     // Refresh sessions list when Claude is ready (finished processing)
     if (workingDirectory) {
       loadAvailableSessions(workingDirectory);
@@ -770,6 +770,7 @@ function App() {
                 {selectedTab === 'chat' && (
                   <ChatInterface
                     onSendMessage={handleSendPrompt}
+                    onStopProcess={stopProcess}
                     disabled={false}
                     selectedFiles={selectedFiles}
                     onClearFiles={() => setSelectedFiles([])}
