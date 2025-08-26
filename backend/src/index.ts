@@ -515,6 +515,79 @@ app.post('/api/hooks/:event', (req, res) => {
   res.json({ status: 'received' });
 });
 
+app.post('/api/compact-conversation', async (req, res) => {
+  const { sessionId, workingDirectory } = req.body;
+  
+  if (!sessionId) {
+    res.status(400).json({ error: 'Session ID is required' });
+    return;
+  }
+  
+  try {
+    logger.info(`Starting conversation compaction for session ${sessionId}`);
+    
+    // Load the session history from JSON file
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const logDir = path.join(workingDirectory || process.cwd(), '.claude-debug');
+    const sessionFile = path.join(logDir, `session-${sessionId}.json`);
+    
+    let conversationText = '';
+    try {
+      const content = await fs.readFile(sessionFile, 'utf-8');
+      const lines = content.split('\n').filter(line => line.trim());
+      
+      // Extract and truncate conversation (remove tool calls, keep user/assistant messages)
+      const messages = [];
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          
+          // Extract user prompts
+          if (entry.type === 'user' && entry.prompt) {
+            messages.push(`User: ${entry.prompt}`);
+          }
+          // Extract assistant messages (from parsed JSON)
+          else if (entry.parsed?.type === 'assistant' && entry.parsed?.subtype === 'message' && entry.parsed?.content) {
+            // Skip tool use messages
+            if (!entry.parsed.content.startsWith('I\'ll') && !entry.parsed.content.includes('tool')) {
+              messages.push(`Assistant: ${entry.parsed.content}`);
+            }
+          }
+        } catch {
+          // Skip malformed entries
+        }
+      }
+      
+      // Limit to last ~50 exchanges to avoid making the summary prompt too long
+      const recentMessages = messages.slice(-100); // Last 50 user + 50 assistant messages
+      conversationText = recentMessages.join('\n\n');
+      
+      if (!conversationText) {
+        throw new Error('No conversation history found');
+      }
+    } catch (error: any) {
+      logger.error('Failed to load session history:', error);
+      // If we can't load history, create a minimal summary request
+      conversationText = 'Unable to load full conversation history. Please provide a general summary of our work so far.';
+    }
+    
+    // Run the shadow summarization
+    const summary = await claudeManager.runShadowSummarization(conversationText);
+    
+    res.json({ 
+      success: true,
+      summary
+    });
+  } catch (error: any) {
+    logger.error('Failed to compact conversation:', error);
+    res.status(500).json({ 
+      error: 'Failed to compact conversation',
+      message: error.message
+    });
+  }
+});
+
 // Add directory history routes
 app.use('/api', directoryHistoryRoutes);
 app.use('/api/voice', voiceRouter);

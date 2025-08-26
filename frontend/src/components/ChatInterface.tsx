@@ -11,7 +11,8 @@ import {
   ToggleButtonGroup,
   Tooltip,
   List,
-  ListItem
+  ListItem,
+  Button
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -24,7 +25,8 @@ import {
   Mic as MicIcon,
   MicOff as MicOffIcon,
   Stop as StopIcon,
-  StopCircle as StopCircleIcon
+  StopCircle as StopCircleIcon,
+  CompressOutlined as CompactIcon
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -36,13 +38,17 @@ import ToolResultBlock from './ToolResultBlock';
 interface ChatInterfaceProps {
   onSendMessage: (message: string) => void;
   onStopProcess?: () => void;
+  onCompactConversation?: () => void;
   disabled?: boolean;
   selectedFiles?: string[];
   onClearFiles?: () => void;
 }
 
 // Memoized message component
-const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessageBorder }: any) => {
+const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessageBorder, onCompactConversation }: any) => {
+  // Check if this is a "Prompt is too long" error message
+  const isPromptTooLong = message.type === 'assistant' && message.content === 'Prompt is too long';
+  
   return (
     <ListItem
       sx={{
@@ -92,7 +98,28 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
             </Typography>
           )}
         </Box>
-        {message.type === 'tool_result' ? (
+        {isPromptTooLong ? (
+          <Box>
+            <Typography variant="body2" color="error" sx={{ mb: 2 }}>
+              The conversation has exceeded the context limit.
+            </Typography>
+            <Button
+              variant="contained"
+              color="primary"
+              startIcon={<CompactIcon />}
+              onClick={onCompactConversation}
+              sx={{
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                color: '#00ffff',
+                '&:hover': {
+                  backgroundColor: 'rgba(0, 255, 255, 0.2)',
+                }
+              }}
+            >
+              Compact & Edit into new session
+            </Button>
+          </Box>
+        ) : message.type === 'tool_result' ? (
           <ToolResultBlock content={message.content} />
         ) : (
           <ReactMarkdown
@@ -147,7 +174,7 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
 ChatMessage.displayName = 'ChatMessage';
 
 // Memoized messages list
-const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageColor, getMessageBorder }: any) => {
+const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageColor, getMessageBorder, onCompactConversation }: any) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
@@ -164,6 +191,7 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
             getMessageIcon={getMessageIcon}
             getMessageColor={getMessageColor}
             getMessageBorder={getMessageBorder}
+            onCompactConversation={onCompactConversation}
           />
         ))}
         {processing && (
@@ -183,11 +211,11 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
 
 MessagesList.displayName = 'MessagesList';
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProcess, disabled, selectedFiles = [], onClearFiles }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProcess, onCompactConversation, disabled, selectedFiles = [], onClearFiles }) => {
   const [input, setInput] = useState('');
   const [messageFilters, setMessageFilters] = useState<string[]>(['user', 'assistant']);
   const [voiceError, setVoiceError] = useState<string>('');
-  const { messages, processing, clearMessages, totalTokens, model } = useClaudeStore();
+  const { messages, processing, clearMessages, totalTokens, model, pendingInput, setPendingInput } = useClaudeStore();
   
   const { isRecording, isTranscribing, voiceEnabled, toggleRecording } = useVoiceInput({
     onTranscription: (text) => {
@@ -221,6 +249,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
     document.addEventListener('keydown', handleKeyPress);
     return () => document.removeEventListener('keydown', handleKeyPress);
   }, [processing, onStopProcess]);
+  
+  // Populate input from pendingInput when it changes
+  useEffect(() => {
+    if (pendingInput) {
+      setInput(pendingInput);
+      setPendingInput(null); // Clear it after using
+    }
+  }, [pendingInput, setPendingInput]);
   
   const handleSend = useCallback(() => {
     if (input.trim() && !disabled && !processing) {
@@ -363,6 +399,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
           getMessageIcon={getMessageIcon}
           getMessageColor={getMessageColor}
           getMessageBorder={getMessageBorder}
+          onCompactConversation={onCompactConversation}
         />
       </Box>
       

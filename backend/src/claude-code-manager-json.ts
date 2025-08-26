@@ -524,6 +524,97 @@ export class ClaudeCodeManager extends EventEmitter {
     this.options.rows = rows;
   }
 
+  // Run a one-shot shadow session for summarization
+  async runShadowSummarization(conversationText: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      logger.info('Starting shadow summarization session...');
+      
+      const summaryPrompt = `You are being asked to summarize a conversation between a user and Claude Code. 
+Please provide a concise summary of the conversation, focusing on:
+1. The main task or problem being worked on
+2. Key decisions and solutions implemented
+3. Current status and any unresolved issues
+4. Important context that should be preserved
+
+Keep the summary focused and under 500 words. Format it as if you're continuing the conversation.
+
+Here is the conversation to summarize:
+
+${conversationText}
+
+Please provide a clear, concise summary that captures the essence of this conversation:`;
+
+      // Spawn a one-shot claude process just for summarization
+      const shadowProcess = spawn('claude', [
+        '--print',  // Non-interactive mode
+        '--verbose',  // Required for stream-json
+        '--output-format', 'stream-json',
+        '--dangerously-skip-permissions',
+        summaryPrompt
+      ], {
+        name: 'xterm-256color',
+        cols: this.options.cols!,
+        rows: this.options.rows!,
+        cwd: this.workingDirectory,
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color'
+        }
+      });
+
+      let summaryBuffer = '';
+      let summaryContent = '';
+      let hasError = false;
+
+      shadowProcess.onData((data) => {
+        summaryBuffer += data;
+        
+        // Process complete lines
+        const lines = summaryBuffer.split('\n');
+        summaryBuffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const message = JSON.parse(line);
+              
+              // Extract assistant message content
+              if (message.type === 'assistant' && message.subtype === 'message') {
+                if (message.content) {
+                  summaryContent += message.content;
+                }
+              } else if (message.type === 'error') {
+                hasError = true;
+                reject(new Error(message.message || 'Summarization failed'));
+                shadowProcess.kill();
+              }
+            } catch (e) {
+              // Not JSON, might be other output
+              logger.debug('Shadow session non-JSON output:', line);
+            }
+          }
+        }
+      });
+
+      shadowProcess.onExit((exitCode) => {
+        logger.info(`Shadow summarization process exited with code ${exitCode}`);
+        if (!hasError) {
+          if (summaryContent) {
+            resolve(summaryContent);
+          } else {
+            reject(new Error('No summary generated'));
+          }
+        }
+      });
+
+      // Set a timeout for the summarization
+      setTimeout(() => {
+        shadowProcess.kill();
+        reject(new Error('Summarization timed out'));
+      }, 60000); // 1 minute timeout
+    });
+  }
+
   private cleanup(): void {
     this.baseSessionId = null;
     this.claudeSessionId = null;

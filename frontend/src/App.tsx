@@ -68,7 +68,7 @@ function App() {
       loadAvailableSessions(workingDirectory);
     }
   });
-  const { sessionActive, startSession, sendPrompt, clearMessages, activeSessionId, updateSessionMessages, sessions } = useClaudeStore();
+  const { sessionActive, startSession, sendPrompt, clearMessages, activeSessionId, updateSessionMessages, sessions, createSession, switchSession, addMessage } = useClaudeStore();
   
   // Load directory from URL and history on mount
   useEffect(() => {
@@ -328,6 +328,105 @@ function App() {
       }, 1000);
     }
   }, [sendPrompt, sendMessage, workingDirectory]);
+
+  const handleCompactConversation = useCallback(async () => {
+    if (!activeSessionId || !workingDirectory) return;
+    
+    console.log('Starting conversation compaction...');
+    
+    // Create a new session for the compacted conversation
+    const newSessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+    
+    // Copy current session messages to the new session
+    const currentMessages = sessions[activeSessionId]?.messages || [];
+    
+    // Create new session and switch to it
+    createSession(newSessionId);
+    updateSessionMessages(newSessionId, currentMessages);
+    switchSession(newSessionId);
+    
+    // Add a status message that we're compacting
+    const compactingMessage = {
+      id: `compact-${Date.now()}`,
+      type: 'system',
+      content: '⏳ Compacting conversation history...',
+      timestamp: Date.now()
+    };
+    addMessage(compactingMessage);
+    
+    try {
+      // Call the backend to run shadow summarization
+      const response = await fetch('/api/compact-conversation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          sessionId: activeSessionId, // Use the old session ID to load its history
+          workingDirectory
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to compact conversation');
+      }
+      
+      const { summary } = await response.json();
+      
+      // Remove the compacting message
+      const { messages } = useClaudeStore.getState().sessions[newSessionId] || { messages: [] };
+      const updatedMessages = messages.filter(m => m.id !== compactingMessage.id);
+      updateSessionMessages(newSessionId, updatedMessages);
+      
+      // Add a success message
+      const successMessage = {
+        id: `compact-success-${Date.now()}`,
+        type: 'system', 
+        content: '✅ Conversation compacted! The summary has been added to the message box below. You can edit it before sending.',
+        timestamp: Date.now()
+      };
+      addMessage(successMessage);
+      
+      // Set the summary in the input field by finding and updating the ChatInterface
+      // We'll need to pass this through props or use a ref
+      // For now, let's add it to the store so ChatInterface can pick it up
+      const { setPendingInput } = useClaudeStore.getState();
+      setPendingInput(summary);
+      
+      // Start the new session in the backend
+      sendMessage({
+        type: 'start-session',
+        workingDirectory: workingDirectory,
+        sessionId: newSessionId,
+        isNewSession: true
+      });
+      
+      // Refresh sessions list
+      setTimeout(() => {
+        loadAvailableSessions(workingDirectory);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Failed to compact conversation:', error);
+      
+      // Remove the compacting message and add error message
+      const { messages } = useClaudeStore.getState().sessions[newSessionId] || { messages: [] };
+      const updatedMessages = messages.filter(m => m.id !== compactingMessage.id);
+      updateSessionMessages(newSessionId, updatedMessages);
+      
+      const errorMessage = {
+        id: `compact-error-${Date.now()}`,
+        type: 'system',
+        content: '❌ Failed to compact conversation. Please try again.',
+        timestamp: Date.now()
+      };
+      addMessage(errorMessage);
+    }
+  }, [activeSessionId, workingDirectory, sessions, createSession, updateSessionMessages, switchSession, addMessage, sendMessage]);
   
   const handleLoadJsonSession = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -771,6 +870,7 @@ function App() {
                   <ChatInterface
                     onSendMessage={handleSendPrompt}
                     onStopProcess={stopProcess}
+                    onCompactConversation={handleCompactConversation}
                     disabled={false}
                     selectedFiles={selectedFiles}
                     onClearFiles={() => setSelectedFiles([])}

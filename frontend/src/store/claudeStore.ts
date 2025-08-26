@@ -51,6 +51,7 @@ interface ClaudeStore {
   sessions: Record<string, SessionData>;
   activeSessionId: string | null;
   todos: TodoItem[];
+  pendingInput: string | null;
   
   startSession: (workingDirectory: string) => Promise<void>;
   stopSession: () => Promise<void>;
@@ -74,6 +75,7 @@ interface ClaudeStore {
   updateSessionMessages: (sessionId: string, messages: Message[]) => void;
   updateTodos: (todos: TodoItem[]) => void;
   setSessionActive: (active: boolean) => void;
+  setPendingInput: (input: string | null) => void;
 }
 
 export const useClaudeStore = create<ClaudeStore>((set) => ({
@@ -89,6 +91,7 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
     sessions: {},
     activeSessionId: null,
     todos: [],
+    pendingInput: null,
     
     startSession: async (_workingDirectory: string) => {
       set({
@@ -436,5 +439,9 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
     
     setSessionActive: (active: boolean) => {
       set({ sessionActive: active });
+    },
+    
+    setPendingInput: (input: string | null) => {
+      set({ pendingInput: input });
     }
   }));
