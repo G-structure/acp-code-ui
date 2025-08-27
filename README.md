@@ -5,7 +5,7 @@ A web interface for Claude Code TUI that provides a more interactive experience 
 
 Still missing some features, but is usable enough (have been using it 80% of the time compared to the standard TUI).
 
-![screenshot]()
+![screenshot](https://raw.githubusercontent.com/ryrobes/claude-code-ui/refs/heads/main/Screenshot_2025-08-27_01-21-58.png)
 
 ## ⚠️ IMPORTANT SECURITY NOTICE ⚠️
 
