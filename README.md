@@ -5,6 +5,8 @@ A web interface for Claude Code TUI that provides a more interactive experience 
 
 Still missing some features, but is usable enough (have been using it 80% of the time compared to the standard TUI).
 
+![screenshot]()
+
 ## ⚠️ IMPORTANT SECURITY NOTICE ⚠️
 
 **This application runs in `--dangerously-skip-permissions` mode AT ALL TIMES**
