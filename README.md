@@ -1,6 +1,9 @@
 # Claude Code Web UI
 
-A modern web interface for Claude Code TUI that provides a rich, interactive experience for AI-assisted coding with Claude.
+A web interface for Claude Code TUI that provides a more interactive experience for AI-assisted coding with Claude.
+*I injured my left hand was annoyed with linux speech to text options so I wanted a way things could be edited and cut and pasted easier - the rest snowballed from there.
+
+Still missing some features, but is usable enough (have been using it 80% of the time compared to the standard TUI).
 
 ## ⚠️ IMPORTANT SECURITY NOTICE ⚠️
 
@@ -39,8 +42,11 @@ This means:
 
 ### Voice Input (Optional)
 - **Speech-to-text** using OpenAI Whisper API
-- Automatically enabled when `OPENAI_API_KEY` environment variable is set
 - Click microphone button to record, transcription appears in message input
+- Needs a local docker instance running whisper-as-a-service - i.e.
+```
+docker rm -f whisper-rest 2>/dev/null || true && docker run -p 9000:9000   -e ASR_MODEL=large-v3   -e ASR_ENGINE=faster_whisper   --name whisper-rest   onerahmet/openai-whisper-asr-webservice
+```
 
 ### Developer Features
 - **JSON debug viewer** - Inspect raw JSON messages from Claude
@@ -52,14 +58,13 @@ This means:
 
 - Node.js 18+ and npm
 - Claude Code CLI installed and authenticated
-- (Optional) OpenAI API key for voice input features
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd claude-code-web-ui
+git clone https://github.com/ryrobes/claude-code-ui.git
+cd claude-code-ui
 
 # Install dependencies
 npm install
@@ -80,7 +85,7 @@ cd ..
 ### Starting the Application
 
 ```bash
-# From the claude-code-web-ui directory
+# From the claude-code-ui directory
 ./start.sh
 ```
 
@@ -95,16 +100,6 @@ The application will start:
 ```
 
 Or press `Ctrl+C` in the terminal where you started the application.
-
-### Enabling Voice Input
-
-Set your OpenAI API key as an environment variable:
-
-```bash
-export OPENAI_API_KEY="your-api-key-here"
-```
-
-The microphone button will automatically appear in the chat interface when the key is detected.
 
 ## Architecture
 
@@ -174,7 +169,7 @@ This is an experimental tool for development use. Contributions should focus on:
 
 ## License
 
-Use at your own risk. This tool provides unrestricted system access to an AI assistant.
+Use at your own risk. This tool provides unrestricted system access to an AI assistant. MIT or whatever.
 
 ---
 
