@@ -6,15 +6,16 @@ Still missing some features, but is usable enough (have been using it 90% of the
 
 I wanted to focus on only what matters and is helpful and not just crowd it with "stuff" like some other similar tools.
 
-### On compacting
+![screenshot](https://raw.githubusercontent.com/ryrobes/claude-code-ui/refs/heads/main/Screenshot_2025-08-27_01-21-58.png)
 
-> The JSON mode I use for a call-and-response doesn't support `/compact`, so when you reach the end of the context window (200k for Claude subs, higher for API calls) you will get presented with a button that takes the existing convo - runs a background clause session to summarize it - opens a new user session and dumps the output to the "first message" text window so it can be edited before you send it.
-
-> It will then attempt to copy over the message history to give the user context about what came before (even though it's not actually in the current context window, only the summarization on).
 
 ### Persistent TODO panel
 
 Intercepts TODOs and keeps them in a side panel instead of only being in the chat log.
+
+### Selective 'system prompt' injection on a per-message basis
+
+Have special handling that is situational? Drop down shows all .md files in the working directory that you can sub in and out to be sent with the next message (example: I have special instructions on handling Clojure paren matching issues with tool explanations, etc - but I don't want that all in my context all the time, just when I need it)
 
 ### On API calls
 
@@ -22,8 +23,14 @@ Intercepts TODOs and keeps them in a side panel instead of only being in the cha
 
 > So be aware, if ANTHROPIC_API_KEY is populated it will be used by default. My start.sh script unsets it just in case - but if you love to spend money (rather than use a Claude MAX sub, etc), feel free to comment that out!
 
+### On compacting
 
-![screenshot](https://raw.githubusercontent.com/ryrobes/claude-code-ui/refs/heads/main/Screenshot_2025-08-27_01-21-58.png)
+> The JSON mode I use for a call-and-response doesn't support `/compact`, so when you reach the end of the context window (200k for Claude subs, higher for API calls) you will get presented with a button that takes the existing convo - runs a background clause session to summarize it - opens a new user session and dumps the output to the "first message" text window so it can be edited before you send it.
+
+> It will then attempt to copy over the message history to give the user context about what came before (even though it's not actually in the current context window, only the summarization on).
+
+
+
 
 ## ☠️ IMPORTANT SECURITY NOTE ☠️
 

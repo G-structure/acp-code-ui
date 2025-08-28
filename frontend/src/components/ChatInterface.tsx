@@ -34,14 +34,16 @@ import { cyberpunkCodeTheme } from '../theme/cyberpunkCodeTheme';
 import { useClaudeStore } from '../store/claudeStore';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import ToolResultBlock from './ToolResultBlock';
+import { MarkdownFileSelector } from './MarkdownFileSelector';
 
 interface ChatInterfaceProps {
-  onSendMessage: (message: string) => void;
+  onSendMessage: (message: string, markdownFiles?: string[]) => void;
   onStopProcess?: () => void;
   onCompactConversation?: () => void;
   disabled?: boolean;
   selectedFiles?: string[];
   onClearFiles?: () => void;
+  workingDirectory?: string | null;
 }
 
 // Memoized message component
@@ -211,10 +213,11 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
 
 MessagesList.displayName = 'MessagesList';
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProcess, onCompactConversation, disabled, selectedFiles = [], onClearFiles }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProcess, onCompactConversation, disabled, selectedFiles = [], onClearFiles, workingDirectory }) => {
   const [input, setInput] = useState('');
   const [messageFilters, setMessageFilters] = useState<string[]>(['user', 'assistant']);
   const [voiceError, setVoiceError] = useState<string>('');
+  const [selectedMarkdownFiles, setSelectedMarkdownFiles] = useState<string[]>([]);
   const { messages, processing, clearMessages, totalTokens, model, pendingInput, setPendingInput } = useClaudeStore();
   
   const { isRecording, isTranscribing, voiceEnabled, toggleRecording } = useVoiceInput({
@@ -274,16 +277,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
         messageWithFiles = `${fileRefs} ${input}`;
       }
       console.log('ChatInterface handleSend:', messageWithFiles);
-      onSendMessage(messageWithFiles);
+      console.log('With markdown files:', selectedMarkdownFiles);
+      
+      // Pass the selected markdown files to the parent
+      onSendMessage(messageWithFiles, selectedMarkdownFiles.length > 0 ? selectedMarkdownFiles : undefined);
       setInput('');
       onClearFiles?.();
+      
+      // Clear markdown files after sending
+      setSelectedMarkdownFiles([]);
       
       // Reset the flag after a short delay
       setTimeout(() => {
         isSendingRef.current = false;
       }, 500);
     }
-  }, [input, disabled, processing, selectedFiles, onSendMessage, onClearFiles]);
+  }, [input, disabled, processing, selectedFiles, selectedMarkdownFiles, onSendMessage, onClearFiles]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -421,6 +430,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
           </Box>
         )}
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+          <MarkdownFileSelector
+            workingDirectory={workingDirectory}
+            selectedFiles={selectedMarkdownFiles}
+            onSelectionChange={setSelectedMarkdownFiles}
+          />
           <TextField
             fullWidth
             multiline

@@ -232,6 +232,25 @@ wss.on('connection', (ws: any) => {
           
         case 'send-prompt':
           logger.info(`Received send-prompt request, session ID: ${claudeManager.sessionId}, prompt: "${data.prompt?.substring(0, 50)}..."`);
+          
+          // Log markdown files if included
+          if (data.markdownFiles && data.markdownFiles.length > 0) {
+            logger.info(`Including ${data.markdownFiles.length} markdown files as system prompt`);
+            // Send to frontend for JSON debug logging
+            wss.clients.forEach((client) => {
+              if (client.readyState === client.OPEN) {
+                client.send(JSON.stringify({
+                  type: 'json-debug',
+                  data: {
+                    type: 'markdown-system-prompt',
+                    files: data.markdownFiles,
+                    timestamp: new Date().toISOString()
+                  }
+                }));
+              }
+            });
+          }
+          
           try {
             claudeManager.sendPrompt(data.prompt);
           } catch (error: any) {
@@ -339,6 +358,97 @@ app.get('/api/file-content', async (req, res) => {
     res.json({ content });
   } catch (error) {
     res.status(500).json({ error: 'Failed to read file' });
+  }
+});
+
+app.get('/api/markdown-files', async (req, res) => {
+  const workingDirectory = req.query.path as string || process.cwd();
+  
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    
+    // Read the directory
+    const files = await fs.readdir(workingDirectory);
+    
+    // Filter for markdown files
+    const markdownFiles = files.filter(file => 
+      file.endsWith('.md') || file.endsWith('.markdown')
+    );
+    
+    // Get file stats for each markdown file
+    const filesWithStats = await Promise.all(
+      markdownFiles.map(async (file) => {
+        const filePath = path.join(workingDirectory, file);
+        try {
+          const stats = await fs.stat(filePath);
+          return {
+            name: file,
+            path: filePath,
+            size: stats.size,
+            modified: stats.mtime.getTime()
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    
+    // Filter out any failed stat calls and sort by name
+    const validFiles = filesWithStats
+      .filter(file => file !== null)
+      .sort((a, b) => a!.name.localeCompare(b!.name));
+    
+    res.json(validFiles);
+  } catch (error: any) {
+    logger.error('Failed to list markdown files:', error);
+    res.status(500).json({ 
+      error: 'Failed to list markdown files',
+      message: error.message
+    });
+  }
+});
+
+app.post('/api/markdown-content', async (req, res) => {
+  const { files } = req.body;
+  
+  if (!files || !Array.isArray(files)) {
+    res.status(400).json({ error: 'Files array is required' });
+    return;
+  }
+  
+  try {
+    const fs = await import('fs/promises');
+    
+    // Read all markdown files
+    const contents = await Promise.all(
+      files.map(async (filePath: string) => {
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          return {
+            path: filePath,
+            name: filePath.split('/').pop() || filePath,
+            content
+          };
+        } catch (error: any) {
+          logger.error(`Failed to read markdown file ${filePath}:`, error);
+          return {
+            path: filePath,
+            name: filePath.split('/').pop() || filePath,
+            content: '',
+            error: error.message
+          };
+        }
+      })
+    );
+    
+    res.json(contents);
+  } catch (error: any) {
+    logger.error('Failed to read markdown contents:', error);
+    res.status(500).json({ 
+      error: 'Failed to read markdown contents',
+      message: error.message
+    });
   }
 });
 

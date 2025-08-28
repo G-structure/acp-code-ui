@@ -313,12 +313,59 @@ function App() {
     }
   }, [isConnected, workingDirectory, sendMessage]); // Only depend on connection and directory changes
   
-  const handleSendPrompt = useCallback((prompt: string) => {
+  const handleSendPrompt = useCallback(async (prompt: string, markdownFiles?: string[]) => {
     console.log('handleSendPrompt called with:', prompt);
-    sendPrompt(prompt);
+    console.log('Markdown files:', markdownFiles);
+    
+    let finalPrompt = prompt;
+    
+    // If markdown files are selected, load and prepend them as system content
+    if (markdownFiles && markdownFiles.length > 0) {
+      try {
+        const response = await fetch('/api/markdown-content', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ files: markdownFiles })
+        });
+        
+        if (response.ok) {
+          const contents = await response.json();
+          
+          // Build system prompt from markdown files
+          const systemPrompt = contents.map((file: any) => {
+            if (file.error) {
+              return `# Error loading ${file.name}: ${file.error}`;
+            }
+            return `# System Instructions from ${file.name}\n\n${file.content}`;
+          }).join('\n\n---\n\n');
+          
+          // Prepend system prompt to the user's message
+          finalPrompt = `<system>\n${systemPrompt}\n</system>\n\n${prompt}`;
+          
+          // Log the markdown file usage
+          console.log('Included markdown files as system prompt:', markdownFiles);
+          
+          // Add a note in the UI that we included system files
+          const systemNote = {
+            id: `system-md-${Date.now()}`,
+            type: 'system',
+            content: `📎 Included ${markdownFiles.length} markdown file(s) as system instructions: ${markdownFiles.map(f => f.split('/').pop()).join(', ')}`,
+            timestamp: Date.now()
+          };
+          addMessage(systemNote);
+        }
+      } catch (error) {
+        console.error('Failed to load markdown files:', error);
+      }
+    }
+    
+    sendPrompt(finalPrompt);
     sendMessage({
       type: 'send-prompt',
-      prompt
+      prompt: finalPrompt,
+      markdownFiles // Include in the message for logging
     });
     
     // Refresh sessions list after sending a message to update timestamps
@@ -327,7 +374,7 @@ function App() {
         loadAvailableSessions(workingDirectory);
       }, 1000);
     }
-  }, [sendPrompt, sendMessage, workingDirectory]);
+  }, [sendPrompt, sendMessage, workingDirectory, addMessage]);
 
   const handleCompactConversation = useCallback(async () => {
     if (!activeSessionId || !workingDirectory) return;
@@ -874,6 +921,7 @@ function App() {
                     disabled={false}
                     selectedFiles={selectedFiles}
                     onClearFiles={() => setSelectedFiles([])}
+                    workingDirectory={workingDirectory}
                   />
                 )}
                 {selectedTab === 'hooks' && (
