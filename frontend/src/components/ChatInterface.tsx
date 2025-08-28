@@ -584,20 +584,44 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
       </Box>
       
       <Box sx={{ p: 2, borderTop: '1px solid rgba(0,255,255,0.15)', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-        {selectedFiles.length > 0 && (
-          <Box sx={{ mb: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-            {selectedFiles.map(file => (
-              <Chip
-                key={file}
-                label={`@${file.split('/').pop()}`}
-                size="small"
-                onDelete={() => {
-                  onClearFiles?.();
-                }}
-                color="primary"
-                variant="outlined"
-              />
-            ))}
+        {(selectedFiles.length > 0 || selectedMarkdownFiles.length > 0) && (
+          <Box sx={{ mb: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5, justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, flex: 1 }}>
+              {selectedFiles.map(file => (
+                <Chip
+                  key={file}
+                  label={`@${file.split('/').pop()}`}
+                  size="small"
+                  onDelete={() => {
+                    onClearFiles?.();
+                  }}
+                  color="primary"
+                  variant="outlined"
+                />
+              ))}
+            </Box>
+            {selectedMarkdownFiles.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {selectedMarkdownFiles.map(file => (
+                  <Chip
+                    key={file}
+                    label={file.split('/').pop()}
+                    size="small"
+                    onDelete={() => setSelectedMarkdownFiles(selectedMarkdownFiles.filter(f => f !== file))}
+                    sx={{
+                      backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                      color: '#00ffff',
+                      '& .MuiChip-deleteIcon': {
+                        color: 'rgba(0, 255, 255, 0.6)',
+                        '&:hover': {
+                          color: '#00ffff',
+                        }
+                      }
+                    }}
+                  />
+                ))}
+              </Box>
+            )}
           </Box>
         )}
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>

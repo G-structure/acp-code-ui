@@ -111,7 +111,7 @@ export const MarkdownFileSelector: React.FC<MarkdownFileSelectorProps> = ({
   }
   
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box>
       <Badge 
         badgeContent={selectedFiles.length} 
         color="primary"
@@ -140,28 +140,6 @@ export const MarkdownFileSelector: React.FC<MarkdownFileSelectorProps> = ({
           </IconButton>
         </Tooltip>
       </Badge>
-      
-      {selectedFiles.length > 0 && (
-        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', maxWidth: '300px' }}>
-          {selectedFiles.map(file => (
-            <Chip
-              key={file}
-              label={file.split('/').pop()}
-              size="small"
-              onDelete={() => toggleFile(file)}
-              sx={{
-                backgroundColor: 'rgba(0, 255, 255, 0.1)',
-                '& .MuiChip-deleteIcon': {
-                  color: 'rgba(0, 255, 255, 0.6)',
-                  '&:hover': {
-                    color: '#00ffff',
-                  }
-                }
-              }}
-            />
-          ))}
-        </Box>
-      )}
       
       <Popover
         open={open}
