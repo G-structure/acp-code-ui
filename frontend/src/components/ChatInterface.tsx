@@ -70,7 +70,7 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
         elevation={1}
         sx={{
           p: 2,
-          maxWidth: '70%',
+          maxWidth: message.type === 'user' ? '70%' : '95%',
           backgroundColor: getMessageColor(message.type),
           border: getMessageBorder(message.type),
           boxShadow: message.type === 'user' ? '0 0 20px rgba(0, 255, 255, 0.1)' : '0 0 20px rgba(255, 0, 255, 0.08)'
