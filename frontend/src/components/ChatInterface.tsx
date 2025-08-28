@@ -326,8 +326,12 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+    // Use a small timeout to ensure DOM has updated with new content
+    const scrollTimer = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, 100);
+    return () => clearTimeout(scrollTimer);
+  }, [messages.length, messages]);
 
   return (
     <>
@@ -352,7 +356,7 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
           </ListItem>
         )}
       </List>
-      <div ref={messagesEndRef} />
+      <div ref={messagesEndRef} style={{ height: 1, marginBottom: 20 }} />
     </>
   );
 });
