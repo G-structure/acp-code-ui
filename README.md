@@ -1,13 +1,27 @@
-# Claude Code Web UI
+# Basic & Clean Claude Code (web) UI
 
-A web interface for Claude Code TUI that provides a more interactive experience for AI-assisted coding with Claude.
-*I injured my left hand was annoyed with linux speech to text options so I wanted a way things could be edited and cut and pasted easier - the rest snowballed from there.
+A (very) dark mode web interface for Claude Code TUI that provides a more interactive experience for AI-assisted coding with Claude. I injured my left hand was annoyed with linux speech-to-text options so I wanted a way things could be edited and cut and pasted easier - the rest snowballed from there.
 
-Still missing some features, but is usable enough (have been using it 80% of the time compared to the standard TUI).
+Still missing some features, but is usable enough (have been using it 90% of the time compared to the standard TUI with few real issues).
+
+I wanted to focus on only what matters and is helpful and not just crowd it with "stuff" like some other similar tools.
+
+### On compacting
+
+> The JSON mode I use for a call-and-response doesn't support `/compact`, so when you reach the end of the context window (200k for Claude subs, higher for API calls) you will get presented with a button that takes the existing convo - runs a background clause session to summarize it - opens a new user session and dumps the output to the "first message" text window so it can be edited before you send it.
+
+> It will then attempt to copy over the message history to give the user context about what came before (even though it's not actually in the current context window, only the summarization on)
+
+### On API calls
+
+> The app assumes that you will want to use a subscription and not the much more expensive per token API access - but Clade in JSON mode will use the API tokens by default unless ANTHROPIC_API_KEY is unset. 
+
+> So be aware, if ANTHROPIC_API_KEY is populated it will be used by default. My start.sh script unsets it just in case - but if you love to spend money (rather than use a Claude MAX sub, etc), feel free to comment that out!
+
 
 ![screenshot](https://raw.githubusercontent.com/ryrobes/claude-code-ui/refs/heads/main/Screenshot_2025-08-27_01-21-58.png)
 
-## ⚠️ IMPORTANT SECURITY NOTICE ⚠️
+## ☠️ IMPORTANT SECURITY NOTE ☠️
 
 **This application runs in `--dangerously-skip-permissions` mode AT ALL TIMES**
 
@@ -17,7 +31,9 @@ This means:
 - Claude can read, write, and delete **ANY FILE** on your system
 - Claude can run potentially destructive operations without confirmation
 
-**USE AT YOUR OWN RISK** - This mode is intended for development environments only.
+**USE AT YOUR OWN RISK**
+
+> This is intended for development environments. Perhaps even on a dedicated "raw dog" server via SSH, if that's how you want to roll.
 
 ## Features
 
