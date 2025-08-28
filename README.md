@@ -10,7 +10,11 @@ I wanted to focus on only what matters and is helpful and not just crowd it with
 
 > The JSON mode I use for a call-and-response doesn't support `/compact`, so when you reach the end of the context window (200k for Claude subs, higher for API calls) you will get presented with a button that takes the existing convo - runs a background clause session to summarize it - opens a new user session and dumps the output to the "first message" text window so it can be edited before you send it.
 
-> It will then attempt to copy over the message history to give the user context about what came before (even though it's not actually in the current context window, only the summarization on)
+> It will then attempt to copy over the message history to give the user context about what came before (even though it's not actually in the current context window, only the summarization on).
+
+### Persistent TODO panel
+
+Intercepts TODOs and keeps them in a side panel instead of only being in the chat log.
 
 ### On API calls
 
@@ -30,6 +34,7 @@ This means:
 - Claude can execute **ANY COMMAND** without asking for permission
 - Claude can read, write, and delete **ANY FILE** on your system
 - Claude can run potentially destructive operations without confirmation
+- Better be nice to Claude or his `rm -rf *` finger might get itchy
 
 **USE AT YOUR OWN RISK**
 
