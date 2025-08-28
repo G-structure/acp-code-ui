@@ -1,5 +1,7 @@
 import React from 'react';
 import { Box, Typography, Paper } from '@mui/material';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface ParsedBlock {
   tag: string;
@@ -10,11 +12,99 @@ interface ToolResultBlockProps {
   content: string;
 }
 
+// Store last detected language across all ToolResultBlock instances
+let lastDetectedLanguage: string | null = null;
+
 const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
+  // Detect file extension from content that mentions file paths
+  const detectFileLanguage = (text: string): string | null => {
+    // Look for patterns like "The file /path/to/file.ext has been"
+    const filePathMatch = text.match(/(?:The file|File:|path:)\s+(\/[^\s]+\.[a-zA-Z]+)/);
+    if (!filePathMatch) return null;
+    
+    const filePath = filePathMatch[1];
+    const extension = filePath.split('.').pop()?.toLowerCase();
+    
+    // Map file extensions to Prism language identifiers
+    const extensionMap: Record<string, string> = {
+      // JavaScript/TypeScript
+      'js': 'javascript',
+      'jsx': 'jsx',
+      'ts': 'typescript',
+      'tsx': 'tsx',
+      'mjs': 'javascript',
+      'cjs': 'javascript',
+      
+      // Clojure/ClojureScript
+      'clj': 'clojure',
+      'cljs': 'clojure',
+      'cljc': 'clojure',
+      'edn': 'clojure',
+      
+      // Web
+      'html': 'html',
+      'htm': 'html',
+      'css': 'css',
+      'scss': 'scss',
+      'sass': 'sass',
+      'less': 'less',
+      
+      // Python
+      'py': 'python',
+      'pyw': 'python',
+      'pyx': 'python',
+      'pyi': 'python',
+      
+      // Shell
+      'sh': 'bash',
+      'bash': 'bash',
+      'zsh': 'bash',
+      'fish': 'bash',
+      
+      // Config/Data
+      'json': 'json',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'toml': 'toml',
+      'xml': 'xml',
+      'ini': 'ini',
+      
+      // Other languages
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'cc': 'cpp',
+      'cxx': 'cpp',
+      'h': 'c',
+      'hpp': 'cpp',
+      'cs': 'csharp',
+      'php': 'php',
+      'rb': 'ruby',
+      'go': 'go',
+      'rs': 'rust',
+      'kt': 'kotlin',
+      'swift': 'swift',
+      'r': 'r',
+      'R': 'r',
+      'sql': 'sql',
+      'md': 'markdown',
+      'markdown': 'markdown',
+      
+      // Build/Config files
+      'dockerfile': 'dockerfile',
+      'makefile': 'makefile',
+      'gradle': 'gradle',
+      'cmake': 'cmake',
+    };
+    
+    return extension ? (extensionMap[extension] || null) : null;
+  };
+
   // Parse XML-like tags from the content
   const parseContent = (text: string): (ParsedBlock | string)[] => {
     const blocks: (ParsedBlock | string)[] = [];
-    const tagRegex = /<(\w+)>([\s\S]*?)<\/\1>/g;
+    // Updated regex to support tags with hyphens (like system-reminder)
+    const tagRegex = /<([\w-]+)>([\s\S]*?)<\/\1>/g;
     let lastIndex = 0;
     let match;
 
@@ -77,6 +167,8 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
       info: '#00aaff',        // Blue for info
       success: '#00ff88',     // Green for success
       system: '#666666',      // Gray for system messages
+      'system-reminder': '#ffaa00', // Orange for system reminders
+      reminder: '#ffaa00',    // Orange for reminders
     };
 
     return colorMap[tag.toLowerCase()] || '#00ffff'; // Default to cyan
@@ -94,6 +186,8 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
       info: 'ℹ',
       success: '✓',
       system: '◆',
+      'system-reminder': '⚠',
+      reminder: '⚠',
     };
 
     return iconMap[tag.toLowerCase()] || '▪';
@@ -142,7 +236,7 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
           borderRadius: '4px',
           margin: '8px 0',
           overflow: 'auto',
-          fontFamily: '"IBM Plex Mono", "Courier New", monospace',
+          fontFamily: '"SF Mono", "IBM Plex Mono", "Courier New", monospace',
         }}
       >
         <Box>
@@ -204,8 +298,139 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
     );
   };
 
-  // Format line-numbered code
-  const formatLineNumberedCode = (text: string) => {
+  // Format line-numbered code with syntax highlighting
+  const formatLineNumberedCode = (text: string, language: string | null) => {
+    const lines = text.split('\n');
+    
+    // Extract just the code parts (without line numbers) for syntax highlighting
+    const codeLines: string[] = [];
+    const lineNumbers: string[] = [];
+    
+    lines.forEach(line => {
+      const match = line.match(/^(\s*)(\d+)(→)(.*)$/);
+      if (match) {
+        lineNumbers.push(match[2]);
+        codeLines.push(match[4] || '');
+      } else {
+        lineNumbers.push('');
+        codeLines.push(line);
+      }
+    });
+    
+    const fullCode = codeLines.join('\n');
+    
+    // Custom style for syntax highlighting
+    const customStyle = {
+      ...atomDark,
+      'pre[class*="language-"]': {
+        ...atomDark['pre[class*="language-"]'],
+        background: 'transparent',
+        margin: 0,
+        padding: 0,
+      },
+      'code[class*="language-"]': {
+        ...atomDark['code[class*="language-"]'],
+        background: 'transparent',
+      }
+    };
+    
+    if (language) {
+      // Use syntax highlighting
+      return (
+        <Paper
+          elevation={0}
+          sx={{
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            border: '1px solid rgba(0, 255, 255, 0.2)',
+            borderRadius: '4px',
+            margin: '8px 0',
+            overflow: 'auto',
+            fontFamily: '"SF Mono", "IBM Plex Mono", "Courier New", monospace',
+            position: 'relative',
+          }}
+        >
+          {/* Language indicator */}
+          <Box sx={{ 
+            position: 'absolute', 
+            top: 0, 
+            right: 0, 
+            padding: '4px 8px',
+            backgroundColor: 'rgba(0, 255, 255, 0.1)',
+            borderLeft: '1px solid rgba(0, 255, 255, 0.2)',
+            borderBottom: '1px solid rgba(0, 255, 255, 0.2)',
+            borderBottomLeftRadius: '4px',
+          }}>
+            <Typography sx={{ 
+              fontSize: '0.7rem', 
+              color: 'rgba(0, 255, 255, 0.7)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.1em',
+            }}>
+              {language}
+            </Typography>
+          </Box>
+          
+          <Box sx={{ display: 'flex' }}>
+            {/* Line numbers column */}
+            <Box sx={{ 
+              borderRight: '1px solid rgba(0, 255, 255, 0.1)',
+              padding: '12px 0',
+              userSelect: 'none',
+            }}>
+              {lineNumbers.map((num, i) => (
+                <Typography
+                  key={i}
+                  component="div"
+                  sx={{
+                    padding: '0 8px',
+                    textAlign: 'right',
+                    color: 'rgba(0, 255, 255, 0.5)',
+                    fontSize: '0.85rem',
+                    lineHeight: '1.5em',
+                    minWidth: '50px',
+                    fontFamily: 'inherit',
+                    height: '1.5em',
+                  }}
+                >
+                  {num}
+                </Typography>
+              ))}
+            </Box>
+            
+            {/* Syntax highlighted code */}
+            <Box sx={{ flexGrow: 1, overflow: 'auto', padding: '12px' }}>
+              <SyntaxHighlighter
+                language={language}
+                style={customStyle}
+                customStyle={{
+                  margin: 0,
+                  padding: 0,
+                  background: 'transparent',
+                  fontSize: '0.9rem',
+                  lineHeight: '1.5em',
+                }}
+                codeTagProps={{
+                  style: {
+                    fontSize: 'inherit',
+                    lineHeight: 'inherit',
+                    fontFamily: '"SF Mono", "IBM Plex Mono", "Courier New", monospace',
+                  }
+                }}
+              >
+                {fullCode}
+              </SyntaxHighlighter>
+            </Box>
+          </Box>
+        </Paper>
+      );
+    } else {
+      // Fallback to non-highlighted version
+      return formatLineNumberedCodePlain(text);
+    }
+  };
+  
+  // Original plain formatting (fallback)
+  const formatLineNumberedCodePlain = (text: string) => {
     const lines = text.split('\n');
     return (
       <Paper
@@ -216,7 +441,7 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
           borderRadius: '4px',
           margin: '8px 0',
           overflow: 'auto',
-          fontFamily: '"IBM Plex Mono", "Courier New", monospace',
+          fontFamily: '"SF Mono", "IBM Plex Mono", "Courier New", monospace',
         }}
       >
         <Box sx={{ display: 'table', width: '100%', minWidth: 'max-content' }}>
@@ -294,9 +519,21 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
   };
 
   const parsedBlocks = parseContent(content);
+  
+  // Try to detect language from the entire content (usually mentioned at the beginning)
+  let detectedLanguage = detectFileLanguage(content);
+  
+  // If we detected a language, save it as the last detected language
+  if (detectedLanguage) {
+    lastDetectedLanguage = detectedLanguage;
+  } 
+  // If no language detected, use the last detected language as fallback
+  else if (lastDetectedLanguage) {
+    detectedLanguage = lastDetectedLanguage;
+  }
 
   return (
-    <Box sx={{ fontFamily: '"IBM Plex Mono", "Courier New", monospace' }}>
+    <Box sx={{ fontFamily: '"SF Mono", "IBM Plex Mono", "Courier New", monospace' }}>
       {parsedBlocks.map((block, index) => {
         if (typeof block === 'string') {
           // Check if this is a diff
@@ -305,7 +542,7 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
           }
           // Check if this is line-numbered code
           if (isLineNumberedCode(block)) {
-            return <React.Fragment key={index}>{formatLineNumberedCode(block)}</React.Fragment>;
+            return <React.Fragment key={index}>{formatLineNumberedCode(block, detectedLanguage)}</React.Fragment>;
           }
           // Regular text without tags
           return (
@@ -378,14 +615,14 @@ const ToolResultBlock: React.FC<ToolResultBlockProps> = ({ content }) => {
                   sx={{
                     fontFamily: 'inherit',
                     fontSize: '0.9rem',
-                    color: block.tag === 'stderr' || block.tag === 'error' ? '#ff6666' : '#00ff88',
+                    color: block.tag === 'stderr' || block.tag === 'error' ? '#ff6666' : '#d0d0d088',
                     margin: 0,
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
                     lineHeight: 1.5,
                     textShadow: block.tag === 'stderr' || block.tag === 'error' 
                       ? '0 0 3px rgba(255, 0, 102, 0.3)' 
-                      : '0 0 3px rgba(0, 255, 136, 0.2)'
+                      : 'none'
                   }}
                 >
                   {block.content || '(empty)'}

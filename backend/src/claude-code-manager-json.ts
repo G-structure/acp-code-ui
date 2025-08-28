@@ -544,6 +544,8 @@ ${conversationText}
 
 Please provide a clear, concise summary that captures the essence of this conversation:`;
 
+      logger.info(`Shadow session prompt length: ${summaryPrompt.length} characters`);
+      
       // Spawn a one-shot claude process just for summarization
       const shadowProcess = spawn('claude', [
         '--print',  // Non-interactive mode
@@ -578,26 +580,49 @@ Please provide a clear, concise summary that captures the essence of this conver
             try {
               const message = JSON.parse(line);
               
+              // Log different message types for debugging
+              if (message.type) {
+                logger.debug(`Shadow session message type: ${message.type}, subtype: ${message.subtype || 'none'}`);
+              }
+              
               // Extract assistant message content
               if (message.type === 'assistant' && message.subtype === 'message') {
                 if (message.content) {
                   summaryContent += message.content;
+                  logger.debug(`Shadow session content received: ${message.content.substring(0, 100)}...`);
                 }
               } else if (message.type === 'error') {
+                logger.error(`Shadow session error: ${message.message || 'Unknown error'}`);
                 hasError = true;
                 reject(new Error(message.message || 'Summarization failed'));
+                shadowProcess.kill();
+              } else if (message.type === 'system' && message.error) {
+                logger.error(`Shadow session system error: ${message.error}`);
+                hasError = true;
+                reject(new Error(message.error));
                 shadowProcess.kill();
               }
             } catch (e) {
               // Not JSON, might be other output
-              logger.debug('Shadow session non-JSON output:', line);
+              if (line.length > 0 && !line.startsWith('{')) {
+                logger.debug('Shadow session non-JSON output:', line.substring(0, 200));
+              }
             }
           }
         }
       });
 
+      // Set a timeout for the summarization - increased to 3 minutes
+      const timeout = setTimeout(() => {
+        logger.warn('Shadow summarization timeout - killing process');
+        hasError = true;
+        shadowProcess.kill();
+        reject(new Error('Summarization timed out after 3 minutes'));
+      }, 180000); // 3 minute timeout
+
       shadowProcess.onExit((exitCode) => {
-        logger.info(`Shadow summarization process exited with code ${exitCode}`);
+        clearTimeout(timeout);
+        logger.info(`Shadow summarization process exited with code ${exitCode?.code || exitCode}`);
         if (!hasError) {
           if (summaryContent) {
             resolve(summaryContent);
@@ -606,12 +631,6 @@ Please provide a clear, concise summary that captures the essence of this conver
           }
         }
       });
-
-      // Set a timeout for the summarization
-      setTimeout(() => {
-        shadowProcess.kill();
-        reject(new Error('Summarization timed out'));
-      }, 60000); // 1 minute timeout
     });
   }
 

@@ -187,8 +187,40 @@ export function useWebSocket(onReady?: () => void) {
             if (message.data?.newId) {
               console.log(`Session ID updated from ${message.data.oldId} to ${message.data.newId}`);
               setSessionId(message.data.newId);
-              // Don't switch sessions here - just update the session ID
-              // The UI should continue to use the original session ID for tabs
+              
+              // Update the store to map the old ID to the new Claude session ID
+              const { sessions, activeSessionId, switchSession } = useClaudeStore.getState();
+              
+              // If the old session ID is currently active, we need to handle the switch
+              if (activeSessionId === message.data.oldId) {
+                // Copy session data from old ID to new ID
+                const oldSession = sessions[message.data.oldId];
+                if (oldSession) {
+                  // Create/update session with Claude's ID
+                  useClaudeStore.setState(state => ({
+                    sessions: {
+                      ...state.sessions,
+                      [message.data.newId]: {
+                        ...oldSession,
+                        id: message.data.newId,
+                        claudeSessionId: message.data.newId
+                      }
+                    },
+                    activeSessionId: message.data.newId,
+                    sessionId: message.data.newId
+                  }));
+                  
+                  // Remove the old session entry
+                  const updatedSessions = { ...useClaudeStore.getState().sessions };
+                  delete updatedSessions[message.data.oldId];
+                  useClaudeStore.setState({ sessions: updatedSessions });
+                }
+              }
+              
+              // Emit custom event to notify App component to handle tab scrolling
+              window.dispatchEvent(new CustomEvent('session-id-updated', {
+                detail: { oldId: message.data.oldId, newId: message.data.newId }
+              }));
             }
             break;
             

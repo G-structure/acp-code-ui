@@ -61,6 +61,7 @@ function App() {
   const directoryTimeout = useRef<NodeJS.Timeout>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasStartedSession = useRef(false);
+  const tabsRef = useRef<HTMLDivElement>(null);
   
   const { isConnected, sendMessage, stopProcess } = useWebSocket(() => {
     // Refresh sessions list when Claude is ready (finished processing)
@@ -100,6 +101,32 @@ function App() {
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  // Listen for session ID updates from Claude
+  useEffect(() => {
+    const handleSessionIdUpdate = (event: CustomEvent) => {
+      const { oldId, newId } = event.detail;
+      console.log(`Handling session ID update from ${oldId} to ${newId}`);
+      
+      // Refresh the sessions list to get the updated session
+      if (workingDirectory) {
+        loadAvailableSessions(workingDirectory);
+      }
+      
+      // Scroll tabs to the left to show newest sessions
+      setTimeout(() => {
+        if (tabsRef.current) {
+          const scrollContainer = tabsRef.current.querySelector('.MuiTabs-scroller');
+          if (scrollContainer) {
+            scrollContainer.scrollLeft = 0; // Scroll to the far left (newest sessions)
+          }
+        }
+      }, 100); // Small delay to ensure DOM is updated
+    };
+    
+    window.addEventListener('session-id-updated', handleSessionIdUpdate as EventListener);
+    return () => window.removeEventListener('session-id-updated', handleSessionIdUpdate as EventListener);
+  }, [workingDirectory]);
   
   const loadDirectoryHistory = async () => {
     try {
@@ -155,7 +182,22 @@ function App() {
     try {
       const response = await fetch(`/api/session-history?path=${encodeURIComponent(directory)}`);
       const data = await response.json();
-      setAvailableSessions(data.sessions || []);
+      const sessions = data.sessions || [];
+      setAvailableSessions(sessions);
+      
+      // Check if any session has a claudeSessionId that matches our activeSessionId
+      // This handles the case where Claude changed our session ID
+      const currentActiveId = useClaudeStore.getState().activeSessionId;
+      if (currentActiveId) {
+        const matchingSession = sessions.find(s => 
+          s.claudeSessionId === currentActiveId || s.id === currentActiveId
+        );
+        if (matchingSession && matchingSession.id !== currentActiveId) {
+          console.log(`Found matching session with Claude ID: ${matchingSession.claudeSessionId}`);
+          // The active session ID in our store matches a Claude session ID
+          // No need to switch, just ensure tab selection works
+        }
+      }
     } catch (error) {
       console.error('Failed to load sessions:', error);
       setAvailableSessions([]);
@@ -400,7 +442,7 @@ function App() {
     const compactingMessage = {
       id: `compact-${Date.now()}`,
       type: 'system',
-      content: '⏳ Compacting conversation history...',
+      content: '⏳ Compacting conversation history... This may take up to 3 minutes.',
       timestamp: Date.now()
     };
     addMessage(compactingMessage);
@@ -419,7 +461,8 @@ function App() {
       });
       
       if (!response.ok) {
-        throw new Error('Failed to compact conversation');
+        const errorData = await response.json();
+        throw new Error(errorData.message || errorData.error || 'Failed to compact conversation');
       }
       
       const { summary } = await response.json();
@@ -457,7 +500,7 @@ function App() {
         loadAvailableSessions(workingDirectory);
       }, 1000);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to compact conversation:', error);
       
       // Remove the compacting message and add error message
@@ -465,13 +508,17 @@ function App() {
       const updatedMessages = messages.filter(m => m.id !== compactingMessage.id);
       updateSessionMessages(newSessionId, updatedMessages);
       
+      const errorDetail = error.message || 'Unknown error occurred';
       const errorMessage = {
         id: `compact-error-${Date.now()}`,
         type: 'system',
-        content: '❌ Failed to compact conversation. Please try again.',
+        content: `❌ Failed to compact conversation: ${errorDetail}\n\nTry reducing the conversation size or restarting the application.`,
         timestamp: Date.now()
       };
       addMessage(errorMessage);
+      
+      // Switch back to the original session on error
+      switchSession(activeSessionId);
     }
   }, [activeSessionId, workingDirectory, sessions, createSession, updateSessionMessages, switchSession, addMessage, sendMessage]);
   
@@ -547,7 +594,7 @@ function App() {
           
           {/* Session Tabs */}
           {workingDirectory && (
-            <Box sx={{ 
+            <Box ref={tabsRef} sx={{ 
               flexGrow: 1, 
               display: 'flex', 
               alignItems: 'center',
@@ -556,7 +603,19 @@ function App() {
               mx: 2 // Add margin for spacing
             }}>
               <Tabs
-                value={availableSessions.some(s => s.id === activeSessionId) ? activeSessionId : (availableSessions.length > 0 ? availableSessions[0].id : false)}
+                value={(() => {
+                  // First check if activeSessionId directly matches any session.id
+                  if (availableSessions.some(s => s.id === activeSessionId)) {
+                    return activeSessionId;
+                  }
+                  // Then check if activeSessionId matches any session's claudeSessionId
+                  const matchingSession = availableSessions.find(s => s.claudeSessionId === activeSessionId);
+                  if (matchingSession) {
+                    return matchingSession.id;
+                  }
+                  // Fallback to first session if available
+                  return availableSessions.length > 0 ? availableSessions[0].id : false;
+                })()}
                 onChange={(_, value) => {
                   if (value === 'new') {
                     // Generate a proper UUID v4

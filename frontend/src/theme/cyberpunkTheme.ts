@@ -36,7 +36,7 @@ export const cyberpunkTheme = createTheme({
     divider: 'rgba(0, 255, 255, 0.12)', // Cyan divider
   },
   typography: {
-    fontFamily: '"Fira Code", "JetBrains Mono", "Consolas", monospace',
+    fontFamily: '"SF Mono", "Fira Code", "JetBrains Mono", "Consolas", monospace',
     h6: {
       fontWeight: 600,
       letterSpacing: '0.05em',

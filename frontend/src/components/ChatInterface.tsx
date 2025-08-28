@@ -12,7 +12,10 @@ import {
   Tooltip,
   List,
   ListItem,
-  Button
+  Button,
+  Select,
+  MenuItem,
+  FormControl
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -26,7 +29,8 @@ import {
   MicOff as MicOffIcon,
   Stop as StopIcon,
   StopCircle as StopCircleIcon,
-  CompressOutlined as CompactIcon
+  CompressOutlined as CompactIcon,
+  AutoAwesome as AutoIcon
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -50,6 +54,20 @@ interface ChatInterfaceProps {
 const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessageBorder, onCompactConversation }: any) => {
   // Check if this is a "Prompt is too long" error message
   const isPromptTooLong = message.type === 'assistant' && message.content === 'Prompt is too long';
+  
+  // Parse thinking mode from user messages
+  let displayContent = message.content;
+  let thinkingMode = null;
+  
+  if (message.type === 'user') {
+    const thinkingMatch = displayContent.match(/^Please use thinking mode: ([\w-]+)\.\n/);
+    if (thinkingMatch) {
+      // Extract thinking mode and remove it from display
+      const mode = thinkingMatch[1];
+      thinkingMode = mode.replace('-think', '');
+      displayContent = displayContent.replace(thinkingMatch[0], '');
+    }
+  }
   
   return (
     <ListItem
@@ -91,6 +109,26 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
             size="small"
             color={message.type === 'user' ? 'primary' : 'secondary'}
           />
+          {thinkingMode && (
+            <Tooltip title={`${thinkingMode} thinking mode`}>
+              <Chip
+                icon={<PsychologyIcon />}
+                label={thinkingMode}
+                size="small"
+                sx={{
+                  backgroundColor: thinkingMode === 'ultra' ? 'rgba(255, 0, 102, 0.15)' :
+                                   thinkingMode === 'deep' ? 'rgba(255, 170, 0, 0.15)' :
+                                   'rgba(0, 255, 255, 0.1)',
+                  color: thinkingMode === 'ultra' ? '#ff0066' :
+                         thinkingMode === 'deep' ? '#ffaa00' :
+                         '#00ffff',
+                  '& .MuiChip-icon': {
+                    color: 'inherit'
+                  }
+                }}
+              />
+            </Tooltip>
+          )}
           <Typography variant="caption" color="text.secondary">
             {new Date(message.timestamp).toLocaleTimeString()}
           </Typography>
@@ -100,7 +138,115 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
             </Typography>
           )}
         </Box>
-        {isPromptTooLong ? (
+        {message.type === 'tool_use' && message.tool_input ? (
+          <Box>
+            <Typography variant="subtitle2" sx={{ color: '#00ff88', mb: 1 }}>
+              {message.tool_name}
+            </Typography>
+            {(() => {
+              // Format tool input based on tool type
+              const input = message.tool_input;
+              if (typeof input === 'object' && input !== null) {
+                // Common tool patterns
+                if (input.command) {
+                  // Bash command
+                  return (
+                    <Box sx={{ 
+                      backgroundColor: 'rgba(0, 0, 0, 0.5)', 
+                      p: 1.5, 
+                      borderRadius: 1,
+                      border: '1px solid rgba(0, 255, 255, 0.2)',
+                      fontFamily: '"SF Mono", monospace',
+                      fontSize: '0.9em'
+                    }}>
+                      <Typography sx={{ color: '#00ffff', fontFamily: 'inherit' }}>
+                        $ {input.command}
+                      </Typography>
+                      {input.description && (
+                        <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.6)', display: 'block', mt: 0.5 }}>
+                          {input.description}
+                        </Typography>
+                      )}
+                    </Box>
+                  );
+                } else if (input.file_path || input.path) {
+                  // File operations
+                  const filePath = input.file_path || input.path;
+                  return (
+                    <Box>
+                      <Typography sx={{ color: '#00aaff', fontFamily: '"SF Mono", monospace', fontSize: '0.9em' }}>
+                        📄 {filePath}
+                      </Typography>
+                      {(input.old_string || input.content || input.pattern) && (
+                        <Box sx={{ 
+                          mt: 1, 
+                          p: 1, 
+                          backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                          borderRadius: 1,
+                          fontSize: '0.85em'
+                        }}>
+                          {input.old_string && (
+                            <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.7)', whiteSpace: 'pre-wrap' }}>
+                              Replacing: {input.old_string}
+                            </Typography>
+                          )}
+                          {input.pattern && (
+                            <Typography sx={{ color: '#ffaa00', fontFamily: '"SF Mono", monospace' }}>
+                              Pattern: {input.pattern}
+                            </Typography>
+                          )}
+                        </Box>
+                      )}
+                    </Box>
+                  );
+                } else if (input.prompt) {
+                  // Task or prompt-based tools
+                  return (
+                    <Typography sx={{ color: 'rgba(255, 255, 255, 0.8)', whiteSpace: 'pre-wrap' }}>
+                      {input.prompt}
+                    </Typography>
+                  );
+                } else if (input.todos) {
+                  // TodoWrite
+                  return (
+                    <Box>
+                      {input.todos.map((todo: any, i: number) => (
+                        <Typography key={i} sx={{ 
+                          color: todo.status === 'completed' ? '#00ff88' : 
+                                 todo.status === 'in_progress' ? '#ffaa00' : 
+                                 'rgba(255, 255, 255, 0.6)',
+                          fontSize: '0.9em'
+                        }}>
+                          {todo.status === 'completed' ? '✓' : 
+                           todo.status === 'in_progress' ? '▶' : '○'} {todo.content}
+                        </Typography>
+                      ))}
+                    </Box>
+                  );
+                } else {
+                  // Generic object display
+                  const displayKeys = Object.keys(input).slice(0, 3);
+                  return (
+                    <Box sx={{ fontSize: '0.9em' }}>
+                      {Object.keys(input).map(key => (
+                        <Typography key={key} sx={{ color: 'rgba(255, 255, 255, 0.7)', whiteSpace: 'pre-wrap' }}>
+                          {key}: {JSON.stringify(input[key], null, 2)}
+                        </Typography>
+                      ))}
+                    </Box>
+                  );
+                }
+              } else {
+                // Simple string/number input
+                return (
+                  <Typography sx={{ color: 'rgba(255, 255, 255, 0.8)' }}>
+                    {String(input)}
+                  </Typography>
+                );
+              }
+            })()}
+          </Box>
+        ) : isPromptTooLong ? (
           <Box>
             <Typography variant="body2" color="error" sx={{ mb: 2 }}>
               The conversation has exceeded the context limit.
@@ -154,7 +300,7 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
                       borderRadius: '3px',
                       border: '1px solid rgba(0, 255, 255, 0.2)',
                       fontSize: '0.9em',
-                      fontFamily: '"Fira Code", "Courier New", monospace',
+                      fontFamily: '"SF Mono", "Fira Code", "Courier New", monospace',
                       textShadow: '0 0 2px rgba(0, 255, 255, 0.3)'
                     }}
                     {...props}
@@ -165,7 +311,7 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
               }
             }}
           >
-            {message.content}
+            {displayContent}
           </ReactMarkdown>
         )}
       </Paper>
@@ -218,6 +364,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
   const [messageFilters, setMessageFilters] = useState<string[]>(['user', 'assistant']);
   const [voiceError, setVoiceError] = useState<string>('');
   const [selectedMarkdownFiles, setSelectedMarkdownFiles] = useState<string[]>([]);
+  const [thinkingMode, setThinkingMode] = useState<string>('auto');
   const { messages, processing, clearMessages, totalTokens, model, pendingInput, setPendingInput } = useClaudeStore();
   
   const { isRecording, isTranscribing, voiceEnabled, toggleRecording } = useVoiceInput({
@@ -272,12 +419,32 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
       isSendingRef.current = true;
       
       let messageWithFiles = input;
+      
+      // Add thinking mode prefix if not auto
+      if (thinkingMode !== 'auto') {
+        const thinkingModeText = thinkingMode === 'ultra' ? 'ultra-think' : 
+                                 thinkingMode === 'deep' ? 'deep-think' :
+                                 thinkingMode === 'normal' ? 'normal-think' : thinkingMode;
+        messageWithFiles = `Please use thinking mode: ${thinkingModeText}.\n${messageWithFiles}`;
+        
+        // Add a visual indicator in the UI
+        const thinkingNote = {
+          id: `thinking-mode-${Date.now()}`,
+          type: 'system',
+          content: `🧠 Using ${thinkingMode} thinking mode`,
+          timestamp: Date.now()
+        };
+        const { addMessage } = useClaudeStore.getState();
+        addMessage(thinkingNote);
+      }
+      
       if (selectedFiles.length > 0) {
         const fileRefs = selectedFiles.map(f => `@${f}`).join(' ');
-        messageWithFiles = `${fileRefs} ${input}`;
+        messageWithFiles = `${fileRefs} ${messageWithFiles}`;
       }
       console.log('ChatInterface handleSend:', messageWithFiles);
       console.log('With markdown files:', selectedMarkdownFiles);
+      console.log('Thinking mode:', thinkingMode);
       
       // Pass the selected markdown files to the parent
       onSendMessage(messageWithFiles, selectedMarkdownFiles.length > 0 ? selectedMarkdownFiles : undefined);
@@ -292,7 +459,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
         isSendingRef.current = false;
       }, 500);
     }
-  }, [input, disabled, processing, selectedFiles, selectedMarkdownFiles, onSendMessage, onClearFiles]);
+  }, [input, disabled, processing, selectedFiles, selectedMarkdownFiles, thinkingMode, onSendMessage, onClearFiles]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -429,12 +596,67 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
             ))}
           </Box>
         )}
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
           <MarkdownFileSelector
             workingDirectory={workingDirectory}
             selectedFiles={selectedMarkdownFiles}
             onSelectionChange={setSelectedMarkdownFiles}
           />
+          <Tooltip title={
+            thinkingMode === 'auto' ? "Claude chooses thinking depth automatically" :
+            thinkingMode === 'normal' ? "Normal thinking mode" :
+            thinkingMode === 'deep' ? "Deep thinking for complex problems" :
+            "Ultra thinking for the most complex challenges"
+          }>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <Select
+              value={thinkingMode}
+              onChange={(e) => setThinkingMode(e.target.value)}
+              displayEmpty
+              startAdornment={
+                thinkingMode === 'auto' ? (
+                  <AutoIcon sx={{ fontSize: 18, mr: 0.5, color: 'rgba(0, 255, 255, 0.6)' }} />
+                ) : (
+                  <PsychologyIcon sx={{ fontSize: 18, mr: 0.5, color: 'rgba(255, 170, 0, 0.6)' }} />
+                )
+              }
+              sx={{
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                '& .MuiSelect-select': {
+                  py: 0.75,
+                  display: 'flex',
+                  alignItems: 'center',
+                },
+                '& .MuiOutlinedInput-notchedOutline': {
+                  borderColor: thinkingMode !== 'auto' ? 'rgba(255, 170, 0, 0.3)' : 'rgba(0, 255, 255, 0.2)',
+                },
+                '&:hover .MuiOutlinedInput-notchedOutline': {
+                  borderColor: thinkingMode !== 'auto' ? 'rgba(255, 170, 0, 0.5)' : 'rgba(0, 255, 255, 0.4)',
+                },
+                '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                  borderColor: thinkingMode !== 'auto' ? '#ffaa00' : '#00ffff',
+                },
+              }}
+            >
+              <MenuItem value="auto" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <AutoIcon sx={{ fontSize: 18 }} />
+                Auto
+              </MenuItem>
+              <MenuItem value="normal" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <PsychologyIcon sx={{ fontSize: 18 }} />
+                Normal
+              </MenuItem>
+              <MenuItem value="deep" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <PsychologyIcon sx={{ fontSize: 18, color: '#ffaa00' }} />
+                Deep
+              </MenuItem>
+              <MenuItem value="ultra" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <PsychologyIcon sx={{ fontSize: 18, color: '#ff0066' }} />
+                Ultra
+              </MenuItem>
+            </Select>
+          </FormControl>
+          </Tooltip>
           <TextField
             fullWidth
             multiline

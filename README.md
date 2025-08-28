@@ -73,10 +73,23 @@ This means:
 ### Voice Input (Optional)
 - **Speech-to-text** using OpenAI Whisper API
 - Click microphone button to record, transcription appears in message input
-- Needs a local docker instance running whisper-as-a-service - i.e.
+- Needs a local (to the browser) docker instance running whisper-as-a-service at 9k - i.e.
 ```
 docker rm -f whisper-rest 2>/dev/null || true && docker run -p 9000:9000   -e ASR_MODEL=large-v3   -e ASR_ENGINE=faster_whisper   --name whisper-rest   onerahmet/openai-whisper-asr-webservice
+## CPU only
 ```
+
+```
+docker rm -f whisper-rest 2>/dev/null || true && docker run --gpus all -p 9000:9000 \
+  -e ASR_MODEL=large-v3 \
+  -e ASR_ENGINE=openai_whisper \
+  -v $PWD/cache:/root/.cache \
+  --name whisper-rest \
+  onerahmet/openai-whisper-asr-webservice:v1.7.1-gpu ## CUDA 11.x of latest-gpu for CUDA 12.6
+## with GPU
+```
+
+(CPU still works great, albiet much slower)
 
 ### Developer Features
 - **JSON debug viewer** - Inspect raw JSON messages from Claude

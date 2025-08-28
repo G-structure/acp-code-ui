@@ -61,6 +61,7 @@ const TodoPanel: React.FC = () => {
         borderRadius: 1,
         overflow: 'hidden',
         height: '100%',
+        // height: (todos.length  * 60),
         display: 'flex',
         flexDirection: 'column'
       }}
@@ -84,7 +85,7 @@ const TodoPanel: React.FC = () => {
                 backgroundColor: 'rgba(0, 255, 136, 0.1)',
                 color: '#00ff88',
                 fontSize: '0.7rem',
-                height: 20
+                height: 15
               }}
             />
           )}
