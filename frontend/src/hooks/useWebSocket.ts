@@ -81,26 +81,33 @@ export function useWebSocket(onReady?: () => void) {
             if (message.message) {
               // Update processing status based on message type
               if (message.message.type === 'thinking') {
-                const preview = message.message.content.substring(0, 80);
-                setProcessingStatus(`💭 ${preview}${message.message.content.length > 80 ? '...' : ''}`);
+                // Much longer preview for thinking messages since CSS handles overflow
+                const preview = message.message.content.substring(0, 200);
+                setProcessingStatus(`💭 ${preview}${message.message.content.length > 200 ? '...' : ''}`);
               } else if (message.message.type === 'tool_use') {
                 const toolName = message.message.tool_name || 'tool';
                 let details = '';
                 if (message.message.tool_input) {
                   const input = message.message.tool_input;
-                  // Extract relevant details based on tool type
+                  // Extract relevant details based on tool type - use longer lengths since CSS will handle overflow
                   if (input.command) {
-                    details = `: ${input.command.substring(0, 50)}${input.command.length > 50 ? '...' : ''}`;
+                    details = `: ${input.command.substring(0, 200)}${input.command.length > 200 ? '...' : ''}`;
                   } else if (input.file_path) {
-                    const fileName = input.file_path.split('/').pop();
-                    details = `: ${fileName}`;
+                    // Show more of the path, not just filename
+                    details = `: ${input.file_path.substring(0, 150)}${input.file_path.length > 150 ? '...' : ''}`;
                   } else if (input.pattern) {
-                    details = `: searching for "${input.pattern.substring(0, 30)}${input.pattern.length > 30 ? '...' : ''}"`;
+                    details = `: searching for "${input.pattern.substring(0, 100)}${input.pattern.length > 100 ? '...' : ''}"`;
                   } else if (input.prompt && toolName === 'Task') {
-                    details = `: ${input.description || input.prompt.substring(0, 40)}${(input.prompt?.length || 0) > 40 ? '...' : ''}`;
+                    details = `: ${input.description || input.prompt.substring(0, 150)}${(input.prompt?.length || 0) > 150 ? '...' : ''}`;
                   } else if (input.todos) {
                     const todoCount = input.todos.length;
-                    details = `: updating ${todoCount} todo${todoCount !== 1 ? 's' : ''}`;
+                    // Show first todo if there's room
+                    const firstTodo = input.todos[0]?.content ? ` - ${input.todos[0].content.substring(0, 100)}` : '';
+                    details = `: updating ${todoCount} todo${todoCount !== 1 ? 's' : ''}${firstTodo}`;
+                  } else if (input.url) {
+                    details = `: ${input.url.substring(0, 100)}${input.url.length > 100 ? '...' : ''}`;
+                  } else if (input.query) {
+                    details = `: "${input.query.substring(0, 100)}${input.query.length > 100 ? '...' : ''}"`;
                   }
                 }
                 setProcessingStatus(`🔧 Running ${toolName}${details}...`);
@@ -113,10 +120,14 @@ export function useWebSocket(onReady?: () => void) {
                 } else if (content.includes('error') || content.includes('failed')) {
                   resultPreview = ' ⚠';
                 } else if (content.length > 0) {
-                  const preview = content.substring(0, 40);
-                  resultPreview = `: ${preview}${content.length > 40 ? '...' : ''}`;
+                  const preview = content.substring(0, 150);
+                  resultPreview = `: ${preview}${content.length > 150 ? '...' : ''}`;
                 }
                 setProcessingStatus(`📋 Inspecting results${toolName ? ` of ${toolName}` : ''}${resultPreview}`);
+              } else if (message.message.type === 'assistant') {
+                // Show a preview of Claude's response
+                const preview = message.message.content.substring(0, 200);
+                setProcessingStatus(`💬 ${preview}${message.message.content.length > 200 ? '...' : ''}`);
               }
               
               // Calculate tokens from usage data

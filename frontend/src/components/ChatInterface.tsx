@@ -498,7 +498,7 @@ const MessagesList = memo(({ messages, processing, processingStatus, getMessageI
                   mt: 0.5,
                   fontStyle: 'italic',
                   opacity: 0.8,
-                  maxWidth: '600px',
+                  maxWidth: '90%',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap'
