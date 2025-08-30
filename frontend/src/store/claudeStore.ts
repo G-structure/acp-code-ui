@@ -42,6 +42,7 @@ interface ClaudeStore {
   sessionActive: boolean;
   sessionId: string | null;
   processing: boolean;
+  processingStatus: string | null;
   messages: Message[];
   output: string[];
   hookEvents: HookEvent[];
@@ -68,6 +69,7 @@ interface ClaudeStore {
   clearJsonDebug: () => void;
   setSessionId: (id: string | null) => void;
   setProcessing: (processing: boolean) => void;
+  setProcessingStatus: (status: string | null) => void;
   setSystemInfo: (info: { model?: string; tools?: string[]; cwd?: string }) => void;
   updateTokenCount: (tokens: number) => void;
   switchSession: (sessionId: string) => void;
@@ -82,6 +84,7 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
     sessionActive: false,
     sessionId: null,
     processing: false,
+    processingStatus: null,
     messages: [],
     output: [],
     hookEvents: [],
@@ -305,7 +308,7 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
     setProcessing: (processing: boolean) => {
       set((state) => {
         // Update processing state for current session
-        const updatedState: any = { processing };
+        const updatedState: any = { processing, processingStatus: processing ? state.processingStatus : null };
         
         // Also update in the active session if it exists
         if (state.activeSessionId && state.sessions[state.activeSessionId]) {
@@ -318,6 +321,10 @@ export const useClaudeStore = create<ClaudeStore>((set) => ({
         
         return updatedState;
       });
+    },
+    
+    setProcessingStatus: (status: string | null) => {
+      set({ processingStatus: status });
     },
     
     setSystemInfo: (info: { model?: string; tools?: string[]; cwd?: string }) => {

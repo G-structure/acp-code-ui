@@ -460,7 +460,7 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
 ChatMessage.displayName = 'ChatMessage';
 
 // Memoized messages list
-const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageColor, getMessageBorder, onCompactConversation }: any) => {
+const MessagesList = memo(({ messages, processing, processingStatus, getMessageIcon, getMessageColor, getMessageBorder, onCompactConversation }: any) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
@@ -488,9 +488,25 @@ const MessagesList = memo(({ messages, processing, getMessageIcon, getMessageCol
           <ListItem sx={{ display: 'flex', alignItems: 'center' }}>
             <BotIcon color="secondary" sx={{ mr: 1 }} />
             <CircularProgress size={20} />
-            <Typography sx={{ ml: 2 }} color="text.secondary">
-              Claude is thinking...
-            </Typography>
+            <Box sx={{ ml: 2 }}>
+              <Typography color="text.secondary">
+                Claude is thinking...
+              </Typography>
+              {processingStatus && (
+                <Typography variant="caption" color="text.secondary" sx={{ 
+                  display: 'block',
+                  mt: 0.5,
+                  fontStyle: 'italic',
+                  opacity: 0.8,
+                  maxWidth: '600px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {processingStatus}
+                </Typography>
+              )}
+            </Box>
           </ListItem>
         )}
       </List>
@@ -507,7 +523,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
   const [voiceError, setVoiceError] = useState<string>('');
   const [selectedMarkdownFiles, setSelectedMarkdownFiles] = useState<string[]>([]);
   const [thinkingMode, setThinkingMode] = useState<string>('auto');
-  const { messages, processing, clearMessages, totalTokens, model, pendingInput, setPendingInput } = useClaudeStore();
+  const { messages, processing, processingStatus, clearMessages, totalTokens, model, pendingInput, setPendingInput } = useClaudeStore();
   
   const { isRecording, isTranscribing, voiceEnabled, toggleRecording } = useVoiceInput({
     onTranscription: (text) => {
@@ -714,6 +730,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
         <MessagesList
           messages={filteredMessages}
           processing={processing}
+          processingStatus={processingStatus}
           getMessageIcon={getMessageIcon}
           getMessageColor={getMessageColor}
           getMessageBorder={getMessageBorder}

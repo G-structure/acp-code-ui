@@ -77,8 +77,48 @@ export function useWebSocket(onReady?: () => void) {
             
           case 'chat-message':
             // Handle chat messages from JSON mode
-            const { addMessage } = useClaudeStore.getState();
+            const { addMessage, setProcessingStatus } = useClaudeStore.getState();
             if (message.message) {
+              // Update processing status based on message type
+              if (message.message.type === 'thinking') {
+                const preview = message.message.content.substring(0, 80);
+                setProcessingStatus(`💭 ${preview}${message.message.content.length > 80 ? '...' : ''}`);
+              } else if (message.message.type === 'tool_use') {
+                const toolName = message.message.tool_name || 'tool';
+                let details = '';
+                if (message.message.tool_input) {
+                  const input = message.message.tool_input;
+                  // Extract relevant details based on tool type
+                  if (input.command) {
+                    details = `: ${input.command.substring(0, 50)}${input.command.length > 50 ? '...' : ''}`;
+                  } else if (input.file_path) {
+                    const fileName = input.file_path.split('/').pop();
+                    details = `: ${fileName}`;
+                  } else if (input.pattern) {
+                    details = `: searching for "${input.pattern.substring(0, 30)}${input.pattern.length > 30 ? '...' : ''}"`;
+                  } else if (input.prompt && toolName === 'Task') {
+                    details = `: ${input.description || input.prompt.substring(0, 40)}${(input.prompt?.length || 0) > 40 ? '...' : ''}`;
+                  } else if (input.todos) {
+                    const todoCount = input.todos.length;
+                    details = `: updating ${todoCount} todo${todoCount !== 1 ? 's' : ''}`;
+                  }
+                }
+                setProcessingStatus(`🔧 Running ${toolName}${details}...`);
+              } else if (message.message.type === 'tool_result') {
+                const toolName = message.message.tool_name || '';
+                const content = message.message.content || '';
+                let resultPreview = '';
+                if (content.includes('successfully') || content.includes('completed')) {
+                  resultPreview = ' ✓';
+                } else if (content.includes('error') || content.includes('failed')) {
+                  resultPreview = ' ⚠';
+                } else if (content.length > 0) {
+                  const preview = content.substring(0, 40);
+                  resultPreview = `: ${preview}${content.length > 40 ? '...' : ''}`;
+                }
+                setProcessingStatus(`📋 Inspecting results${toolName ? ` of ${toolName}` : ''}${resultPreview}`);
+              }
+              
               // Calculate tokens from usage data
               let tokens = undefined;
               if (message.message.usage) {
