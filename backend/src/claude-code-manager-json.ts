@@ -80,6 +80,10 @@ export class ClaudeCodeManager extends EventEmitter {
   get sessionId(): string | null {
     return this.baseSessionId;
   }
+  
+  get currentWorkingDirectory(): string {
+    return this.workingDirectory;
+  }
 
   async stopSession(): Promise<void> {
     if (this.currentProcess) {
@@ -318,8 +322,9 @@ export class ClaudeCodeManager extends EventEmitter {
                   
                   // Emit tool results as separate messages
                   toolResults.forEach((toolResult: any) => {
+                    this.messageCount++;
                     this.emit('chat-message', {
-                      id: `tool-result-${Date.now()}-${Math.random()}`,
+                      id: `tool-result-${this.baseSessionId}-${this.messageCount}-${Date.now()}`,
                       type: 'tool_result',
                       content: toolResult.content || 'Tool result',
                       tool_use_id: toolResult.tool_use_id
@@ -328,8 +333,9 @@ export class ClaudeCodeManager extends EventEmitter {
                   
                   // Emit tool uses as separate messages
                   toolUses.forEach((toolUse: any) => {
+                    this.messageCount++;
                     this.emit('chat-message', {
-                      id: `tool-use-${Date.now()}-${Math.random()}`,
+                      id: `tool-use-${this.baseSessionId}-${this.messageCount}-${Date.now()}`,
                       type: 'tool_use',
                       content: `Using tool: ${toolUse.name || 'Unknown'}`,
                       tool_name: toolUse.name,
@@ -370,22 +376,35 @@ export class ClaudeCodeManager extends EventEmitter {
                   
                   // Check for tool_use blocks in assistant messages
                   const toolUses = message.message.content.filter((c: any) => c.type === 'tool_use');
-                  toolUses.forEach((toolUse: any) => {
-                    this.emit('chat-message', {
-                      id: `tool-use-${Date.now()}-${Math.random()}`,
-                      type: 'tool_use',
-                      content: `Using tool: ${toolUse.name || 'Unknown'}`,
-                      tool_name: toolUse.name,
-                      tool_input: toolUse.input
-                    });
-                    
-                    // Special handling for TodoWrite
-                    if (toolUse.name === 'TodoWrite' && toolUse.input?.todos) {
-                      this.emit('todo-update', {
-                        todos: toolUse.input.todos
+                  if (toolUses.length > 0) {
+                    // If we have tool uses, finalize any streaming message and reset
+                    if (isStreaming && streamMessageId) {
+                      this.emit('chat-message-finalize', {
+                        id: streamMessageId
                       });
+                      isStreaming = false;
+                      hasEmittedMessage = false;
+                      streamMessageId = null;
                     }
-                  });
+                    
+                    toolUses.forEach((toolUse: any) => {
+                      this.messageCount++;
+                      this.emit('chat-message', {
+                        id: `tool-use-${this.baseSessionId}-${this.messageCount}-${Date.now()}`,
+                        type: 'tool_use',
+                        content: `Using tool: ${toolUse.name || 'Unknown'}`,
+                        tool_name: toolUse.name,
+                        tool_input: toolUse.input
+                      });
+                      
+                      // Special handling for TodoWrite
+                      if (toolUse.name === 'TodoWrite' && toolUse.input?.todos) {
+                        this.emit('todo-update', {
+                          todos: toolUse.input.todos
+                        });
+                      }
+                    });
+                  }
                   
                   // Extract text content
                   const textContent = message.message.content
@@ -393,41 +412,47 @@ export class ClaudeCodeManager extends EventEmitter {
                     .map((c: any) => c.text)
                     .join('');
                   
-                  if (textContent && textContent !== lastAssistantContent) {
-                    lastAssistantContent = textContent;
+                  if (textContent) {
+                    // Check if this is a new message (different content or after tool use)
+                    const isNewMessage = textContent !== lastAssistantContent || !hasEmittedMessage;
                     
-                    if (!hasEmittedMessage) {
-                      // First time seeing content - create new message
-                      hasEmittedMessage = true;
-                      isStreaming = true;
-                      streamMessageId = `msg-${Date.now()}`;
+                    if (isNewMessage) {
+                      lastAssistantContent = textContent;
                       
-                      // Emit initial assistant message with usage data
-                      this.emit('chat-message', {
-                        type: 'assistant',
-                        content: textContent,
-                        id: streamMessageId,
-                        streaming: true,
-                        model: message.message?.model || undefined,
-                        usage: message.message?.usage || undefined
-                      });
-                      
-                      // Emit token usage if available
-                      if (message.message?.usage) {
-                        this.emit('token-usage', message.message.usage);
-                      }
-                    } else if (isStreaming) {
-                      // Update existing streaming message
-                      this.emit('chat-message-update', {
-                        id: streamMessageId,
-                        content: textContent,
-                        model: message.message?.model || undefined,
-                        usage: message.message?.usage || undefined
-                      });
-                      
-                      // Emit token usage if available
-                      if (message.message?.usage) {
-                        this.emit('token-usage', message.message.usage);
+                      if (!hasEmittedMessage || !isStreaming) {
+                        // First time seeing content - create new message
+                        hasEmittedMessage = true;
+                        isStreaming = true;
+                        this.messageCount++;
+                        streamMessageId = `msg-${this.baseSessionId}-${this.messageCount}-${Date.now()}`;
+                        
+                        // Emit initial assistant message with usage data
+                        this.emit('chat-message', {
+                          type: 'assistant',
+                          content: textContent,
+                          id: streamMessageId,
+                          streaming: true,
+                          model: message.message?.model || undefined,
+                          usage: message.message?.usage || undefined
+                        });
+                        
+                        // Emit token usage if available
+                        if (message.message?.usage) {
+                          this.emit('token-usage', message.message.usage);
+                        }
+                      } else if (isStreaming) {
+                        // Update existing streaming message
+                        this.emit('chat-message-update', {
+                          id: streamMessageId,
+                          content: textContent,
+                          model: message.message?.model || undefined,
+                          usage: message.message?.usage || undefined
+                        });
+                        
+                        // Emit token usage if available
+                        if (message.message?.usage) {
+                          this.emit('token-usage', message.message.usage);
+                        }
                       }
                     }
                     logger.debug(`Assistant message: ${textContent.substring(0, 100)}...`);
@@ -458,8 +483,9 @@ export class ClaudeCodeManager extends EventEmitter {
                   output: message.tool_result
                 });
                 // Also emit as a chat message for display
+                this.messageCount++;
                 this.emit('chat-message', {
-                  id: `tool-result-${Date.now()}-${Math.random()}`,
+                  id: `tool-result-${this.baseSessionId}-${this.messageCount}-${Date.now()}`,
                   type: 'tool_result',
                   content: `Tool result from: ${message.tool_name}`,
                   tool_name: message.tool_name,

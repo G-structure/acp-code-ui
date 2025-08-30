@@ -55,7 +55,27 @@ claudeManager.on('system-info', (data) => {
 });
 
 // Chat messages
-claudeManager.on('chat-message', (message) => {
+claudeManager.on('chat-message', async (message) => {
+  // Log the message to session file
+  try {
+    const workingDirectory = claudeManager.currentWorkingDirectory || process.cwd();
+    const sessionId = claudeManager.sessionId;
+    if (sessionId) {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const logDir = path.join(workingDirectory, '.claude-debug');
+      await fs.mkdir(logDir, { recursive: true });
+      
+      const logFile = path.join(logDir, `session-${sessionId}.json`);
+      const timestamp = new Date().toISOString();
+      const logEntry = JSON.stringify({ timestamp, message }) + '\n';
+      
+      await fs.appendFile(logFile, logEntry);
+    }
+  } catch (error) {
+    logger.debug('Failed to log chat message:', error);
+  }
+  
   wss.clients.forEach((client) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({

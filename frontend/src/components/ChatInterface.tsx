@@ -69,6 +69,33 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
     }
   }
   
+  // Parse thinking tags from assistant messages
+  const parseThinkingTags = (content: string) => {
+    const tagRegex = /<([\w_]*thinking[\w_]*)>([\s\S]*?)<\/\1>/gi;
+    const parts: any[] = [];
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = tagRegex.exec(content)) !== null) {
+      // Add text before the tag
+      if (match.index > lastIndex) {
+        parts.push({ type: 'text', content: content.slice(lastIndex, match.index) });
+      }
+      // Add the thinking content
+      parts.push({ type: 'thinking', content: match[2].trim() });
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // Add remaining text
+    if (lastIndex < content.length) {
+      parts.push({ type: 'text', content: content.slice(lastIndex) });
+    }
+    
+    return parts.length > 0 ? parts : [{ type: 'text', content }];
+  };
+  
+  const contentParts = message.type === 'assistant' ? parseThinkingTags(displayContent) : null;
+  
   return (
     <ListItem
       sx={{
@@ -269,6 +296,117 @@ const ChatMessage = memo(({ message, getMessageIcon, getMessageColor, getMessage
           </Box>
         ) : message.type === 'tool_result' ? (
           <ToolResultBlock content={message.content} />
+        ) : message.type === 'assistant' && contentParts && contentParts.some((p: any) => p.type === 'thinking') ? (
+          <Box>
+            {contentParts.map((part: any, index: number) => (
+              part.type === 'thinking' ? (
+                <Box key={index} sx={{ 
+                  mt: index > 0 ? 1 : 0,
+                  mb: 1,
+                  p: 2,
+                  backgroundColor: 'rgba(128, 128, 128, 0.1)',
+                  borderLeft: '3px solid rgba(128, 128, 128, 0.3)',
+                  borderRadius: 1
+                }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(128, 128, 128, 0.8)', display: 'block', mb: 0.5 }}>
+                    💭 Thinking
+                  </Typography>
+                  <ReactMarkdown
+                    components={{
+                      code({ inline, className, children, ...props }: any) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        return !inline && match ? (
+                          <SyntaxHighlighter
+                            style={cyberpunkCodeTheme}
+                            language={match[1]}
+                            PreTag="div"
+                            customStyle={{
+                              background: '#0a0a0a',
+                              border: '1px solid rgba(128, 128, 128, 0.2)',
+                              borderRadius: '4px',
+                              padding: '12px',
+                            }}
+                            {...props}
+                          >
+                            {String(children).replace(/\n$/, '')}
+                          </SyntaxHighlighter>
+                        ) : (
+                          <code className={className} style={{
+                            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                            color: 'rgba(160, 160, 160, 0.9)',
+                            padding: '2px 6px',
+                            borderRadius: '3px',
+                            border: '1px solid rgba(128, 128, 128, 0.2)',
+                            fontSize: '0.9em',
+                            fontFamily: '"SF Mono", "Fira Code", "Courier New", monospace',
+                          }} {...props}>
+                            {children}
+                          </code>
+                        );
+                      },
+                      p: ({ children }: any) => (
+                        <Typography sx={{ color: 'rgba(160, 160, 160, 0.9)', mb: 1 }}>
+                          {children}
+                        </Typography>
+                      ),
+                      li: ({ children }: any) => (
+                        <li style={{ color: 'rgba(160, 160, 160, 0.9)' }}>
+                          {children}
+                        </li>
+                      )
+                    }}
+                  >
+                    {part.content}
+                  </ReactMarkdown>
+                </Box>
+              ) : part.content.trim() ? (
+                <ReactMarkdown
+                  key={index}
+                  components={{
+                    code({ inline, className, children, ...props }: any) {
+                      const match = /language-(\w+)/.exec(className || '');
+                      return !inline && match ? (
+                        <SyntaxHighlighter
+                          style={cyberpunkCodeTheme}
+                          language={match[1]}
+                          PreTag="div"
+                          customStyle={{
+                            background: '#0a0a0a',
+                            border: '1px solid rgba(0, 255, 255, 0.2)',
+                            borderRadius: '4px',
+                            padding: '12px',
+                            boxShadow: 'inset 0 0 20px rgba(0, 255, 255, 0.05)',
+                          }}
+                          {...props}
+                        >
+                          {String(children).replace(/\n$/, '')}
+                        </SyntaxHighlighter>
+                      ) : (
+                        <code 
+                          className={className} 
+                          style={{
+                            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                            color: '#00ffff',
+                            padding: '2px 6px',
+                            borderRadius: '3px',
+                            border: '1px solid rgba(0, 255, 255, 0.2)',
+                            fontSize: '0.9em',
+                            fontFamily: '"SF Mono", "Fira Code", "Courier New", monospace',
+                            textShadow: '0 0 2px rgba(0, 255, 255, 0.3)'
+                          }}
+                          {...props}
+                        >
+                          {children}
+                        </code>
+                      );
+                    }
+                  }}
+                >
+                  {part.content}
+                </ReactMarkdown>
+              ) : null
+            ))}
+          </Box>
         ) : (
           <ReactMarkdown
             components={{

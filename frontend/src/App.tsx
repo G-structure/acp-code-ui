@@ -223,26 +223,40 @@ function App() {
         });
         
         // Parse and add messages from history
-        data.messages.forEach((entry: any) => {
+        data.messages.forEach((entry: any, index: number) => {
           // Handle our custom user prompt logging
           if (entry.type === 'user' && entry.prompt) {
             messages.push({ 
-              id: `msg-${Date.now()}-${Math.random()}`,
+              id: `history-user-${index}-${Date.now()}`,
               type: 'user', 
               content: entry.prompt,
               timestamp: new Date(entry.timestamp).getTime()
             });
           } else if (entry.parsed) {
             const msg = entry.parsed;
-            // Handle user messages from the parsed JSON (less common)
-            if (msg.type === 'user' && msg.prompt) {
-              messages.push({ 
-                id: `msg-${Date.now()}-${Math.random()}`,
-                type: 'user', 
-                content: msg.prompt,
-                timestamp: new Date(entry.timestamp).getTime()
-              });
+            // Handle different message types from parsed JSON
+            if (msg.type === 'user') {
+              if (msg.prompt) {
+                messages.push({ 
+                  id: `history-user-${index}-${Date.now()}`,
+                  type: 'user', 
+                  content: msg.prompt,
+                  timestamp: new Date(entry.timestamp).getTime()
+                });
+              } else if (msg.message?.content) {
+                // Handle tool results in user messages
+                const toolResults = msg.message.content.filter((c: any) => c.type === 'tool_result');
+                toolResults.forEach((toolResult: any, toolIndex: number) => {
+                  messages.push({
+                    id: `history-tool-result-user-${index}-${toolIndex}-${Date.now()}`,
+                    type: 'tool_result',
+                    content: toolResult.content || 'Tool result',
+                    timestamp: new Date(entry.timestamp).getTime()
+                  });
+                });
+              }
             } else if (msg.type === 'assistant' && msg.message) {
+              // Extract text content from assistant messages
               const textContent = msg.message.content
                 ?.filter((c: any) => c.type === 'text')
                 ?.map((c: any) => c.text)
@@ -251,7 +265,7 @@ function App() {
                 // Extract tokens from the usage field
                 const tokens = msg.message.usage?.output_tokens || undefined;
                 messages.push({ 
-                  id: `msg-${Date.now()}-${Math.random()}`,
+                  id: msg.id || `history-assistant-${index}-${Date.now()}`,
                   type: 'assistant', 
                   content: textContent,
                   tokens,
@@ -259,9 +273,78 @@ function App() {
                   timestamp: new Date(entry.timestamp).getTime()
                 });
               }
+              // Also extract tool uses from assistant messages
+              const toolUses = msg.message.content?.filter((c: any) => c.type === 'tool_use') || [];
+              toolUses.forEach((toolUse: any, toolIndex: number) => {
+                messages.push({
+                  id: `history-tool-use-${index}-${toolIndex}-${Date.now()}`,
+                  type: 'tool_use',
+                  content: `Using tool: ${toolUse.name || 'Unknown'}`,
+                  tool_name: toolUse.name,
+                  tool_input: toolUse.input,
+                  timestamp: new Date(entry.timestamp).getTime()
+                });
+              });
+            } else if (msg.type === 'tool_use') {
+              // Direct tool use messages
+              messages.push({
+                id: msg.id || `history-tool-use-${index}-${Date.now()}`,
+                type: 'tool_use',
+                content: msg.content || `Using tool: ${msg.tool_name || 'Unknown'}`,
+                tool_name: msg.tool_name,
+                tool_input: msg.tool_input,
+                timestamp: new Date(entry.timestamp).getTime()
+              });
+            } else if (msg.type === 'tool_result') {
+              // Tool result messages
+              messages.push({
+                id: msg.id || `history-tool-result-${index}-${Date.now()}`,
+                type: 'tool_result',
+                content: msg.content || msg.tool_result || 'Tool result',
+                tool_name: msg.tool_name,
+                timestamp: new Date(entry.timestamp).getTime()
+              });
+            } else if (msg.type === 'thinking') {
+              // Thinking messages
+              messages.push({
+                id: msg.id || `history-thinking-${index}-${Date.now()}`,
+                type: 'thinking',
+                content: msg.content,
+                timestamp: new Date(entry.timestamp).getTime()
+              });
+            } else if (msg.type === 'system') {
+              // System messages (but skip init messages)
+              if (msg.subtype !== 'init' && msg.content) {
+                messages.push({
+                  id: `history-system-${index}-${Date.now()}`,
+                  type: 'system',
+                  content: msg.content,
+                  timestamp: new Date(entry.timestamp).getTime()
+                });
+              }
+            }
+          } else if (entry.message) {
+            // Handle simple message format (from our own logging)
+            if (entry.message.type && entry.message.content) {
+              messages.push({
+                id: entry.message.id || `history-${entry.message.type}-${index}-${Date.now()}`,
+                type: entry.message.type,
+                content: entry.message.content,
+                tool_name: entry.message.tool_name,
+                tool_input: entry.message.tool_input,
+                tokens: entry.message.tokens,
+                model: entry.message.model,
+                timestamp: new Date(entry.timestamp || Date.now()).getTime()
+              });
             }
           }
         });
+        
+        // Sort messages by timestamp to ensure proper order
+        messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        
+        console.log(`Loaded ${messages.length} messages from session history`);
+        console.log('Message types:', messages.map(m => m.type));
         
         // Switch to this session and mark it as active WITHOUT clearing messages
         const { switchSession, updateSessionMessages, setSessionActive } = useClaudeStore.getState();
