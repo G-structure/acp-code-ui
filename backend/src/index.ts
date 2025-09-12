@@ -15,16 +15,17 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3001;
 const wsPort = process.env.WS_PORT || 3002; // Separate WebSocket port
+const bindIP = process.env.BIND_IP || 'localhost'; // IP address to bind to
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increase limit for JSON session uploads
 
 const server = createServer(app);
 
-// Create a separate WebSocket server on a different port, bound to 127.0.0.1
+// Create a separate WebSocket server on a different port, bound to specified IP
 const wss = new WebSocketServer({ 
   port: wsPort,
-  host: '127.0.0.1' // Explicitly bind to loopback address
+  host: bindIP // Bind to specified IP address
 });
 
 const claudeManager = new ClaudeCodeManager();
@@ -722,9 +723,9 @@ app.post('/api/compact-conversation', async (req, res) => {
 app.use('/api', directoryHistoryRoutes);
 app.use('/api/voice', voiceRouter);
 
-server.listen(port, () => {
-  logger.info(`Claude Code Web UI backend running on port ${port}`);
-  logger.info(`WebSocket server running on port ${wsPort}`);
+server.listen(port, bindIP, () => {
+  logger.info(`Claude Code Web UI backend running on ${bindIP}:${port}`);
+  logger.info(`WebSocket server running on ${bindIP}:${wsPort}`);
   hookServer.start();
 });
 

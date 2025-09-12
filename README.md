@@ -132,6 +132,12 @@ cd ..
 ./start.sh
 ```
 
+or bind to a specific IP
+
+```bash
+./start.sh 0.0.0.0
+````
+
 The application will start:
 - Backend on http://localhost:3001
 - Frontend on http://localhost:3000

@@ -1,7 +1,11 @@
 #!/bin/bash
 
+# Get IP address from first argument, default to localhost
+BIND_IP=${1:-localhost}
+
 # Kill any existing processes on ports 3000, 3001, and 3002
 echo "🔍 Checking for existing processes..."
+echo "🌐 Binding to IP: $BIND_IP"
 
 unset ANTHROPIC_API_KEY
 ## comment this out if you'd rather use API key tokens instead of a Claude subscription
@@ -36,7 +40,7 @@ echo ""
 # Start the backend
 echo "🚀 Starting backend on port 3001..."
 cd backend
-npm run dev &
+BIND_IP=$BIND_IP npm run dev &
 BACKEND_PID=$!
 
 # Wait a bit for backend to start
@@ -45,14 +49,14 @@ sleep 3
 # Start the frontend
 echo "🚀 Starting frontend on port 3000..."
 cd ../frontend
-npm run dev &
+BIND_IP=$BIND_IP npm run dev &
 FRONTEND_PID=$!
 
 echo ""
 echo "✨ Claude Code Web UI is starting!"
-echo "   Backend:  http://localhost:3001 (PID: $BACKEND_PID)"
-echo "   WebSocket: ws://localhost:3002"
-echo "   Frontend: http://localhost:3000 (PID: $FRONTEND_PID)"
+echo "   Backend:  http://$BIND_IP:3001 (PID: $BACKEND_PID)"
+echo "   WebSocket: ws://$BIND_IP:3002"
+echo "   Frontend: http://$BIND_IP:3000 (PID: $FRONTEND_PID)"
 echo ""
 echo "Press Ctrl+C to stop all services"
 
