@@ -382,6 +382,26 @@ app.get('/api/file-content', async (req, res) => {
   }
 });
 
+app.post('/api/save-file', async (req, res) => {
+  const { path, content } = req.body;
+  
+  if (!path || content === undefined) {
+    res.status(400).json({ error: 'Path and content are required' });
+    return;
+  }
+  
+  try {
+    await fsAPI.writeFile(path, content);
+    res.json({ success: true });
+  } catch (error: any) {
+    logger.error(`Failed to save file ${path}:`, error);
+    res.status(500).json({ 
+      error: 'Failed to save file',
+      message: error.message
+    });
+  }
+});
+
 app.get('/api/markdown-files', async (req, res) => {
   const workingDirectory = req.query.path as string || process.cwd();
   

@@ -33,6 +33,7 @@ import HookEventMonitor from './components/HookEventMonitor';
 import JsonDebugViewer from './components/JsonDebugViewer';
 import TodoPanel from './components/TodoPanel';
 import ResizablePanel from './components/ResizablePanel';
+import CodeEditor from './components/CodeEditor';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useClaudeStore } from './store/claudeStore';
 
@@ -40,7 +41,7 @@ const DRAWER_WIDTH = 360;
 
 function App() {
   const [drawerOpen, setDrawerOpen] = useState(true);
-  const [selectedTab, setSelectedTab] = useState<'chat' | 'terminal' | 'hooks' | 'json'>('chat');
+  const [selectedTab, setSelectedTab] = useState<'chat' | 'terminal' | 'hooks' | 'json' | 'editor'>('chat');
   const [workingDirectory, setWorkingDirectory] = useState('');
   
   // Get directory from URL hash or use default
@@ -1033,6 +1034,16 @@ function App() {
                   Chat
                 </Button>
                 <Button
+                  onClick={() => setSelectedTab('editor')}
+                  sx={{
+                    color: selectedTab === 'editor' ? 'primary.main' : 'text.secondary',
+                    borderBottom: selectedTab === 'editor' ? '2px solid' : 'none',
+                    borderRadius: 0
+                  }}
+                >
+                  Code Editor
+                </Button>
+                <Button
                   onClick={() => setSelectedTab('hooks')}
                   sx={{
                     color: selectedTab === 'hooks' ? 'primary.main' : 'text.secondary',
@@ -1063,6 +1074,13 @@ function App() {
                     disabled={false}
                     selectedFiles={selectedFiles}
                     onClearFiles={() => setSelectedFiles([])}
+                    workingDirectory={workingDirectory}
+                  />
+                )}
+                {selectedTab === 'editor' && (
+                  <CodeEditor
+                    selectedFiles={selectedFiles}
+                    onCloseEditor={() => setSelectedTab('chat')}
                     workingDirectory={workingDirectory}
                   />
                 )}
