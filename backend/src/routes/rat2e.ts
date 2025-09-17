@@ -33,7 +33,7 @@ router.post('/complete', async (req, res) => {
 // GET /api/rat2e/presence -> proxy to relay
 router.get('/presence', async (_req, res) => {
   try {
-    const url = `${RELAY_URL}/v1/presence`;
+    const url = `${RELAY_URL}/v1/presence/snapshot`;
     const r = await fetch(url);
     if (!r.ok) {
       res.status(r.status).json({ error: 'presence fetch failed' });

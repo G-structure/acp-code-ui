@@ -41,7 +41,7 @@ export class Rat2eRelayClient {
     };
     ws.onerror = (ev) => events?.onError?.(ev);
     ws.onclose = (ev) => events?.onClose?.(ev);
-    ws.onmessage = (ev) => {
+    ws.onmessage = async (ev) => {
       if (typeof ev.data !== 'string') {
         const buf = ev.data as ArrayBuffer;
         events?.onCiphertext?.(buf);

@@ -328,6 +328,7 @@ if (wss) wss.on('connection', (ws: any) => {
 
 // Set up periodic ping to keep connections alive
 const pingInterval = setInterval(() => {
+  if (!wss) return; // Skip if WebSocket server is not initialized
   wss.clients.forEach((ws: any) => {
     if (ws.readyState !== ws.OPEN) {
       return; // Skip closed connections
