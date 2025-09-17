@@ -7,10 +7,12 @@ export type RelayEvents = {
   onClose?: (ev: CloseEvent) => void;
   onError?: (ev: Event) => void;
   onCiphertext?: (data: ArrayBuffer) => void;
+  onJson?: (obj: any) => void;
 };
 
 export class Rat2eRelayClient {
   private ws: WebSocket | null = null;
+  private noise: any | null = null;
 
   connect(opts: {
     relayWsUrl: string; // e.g. wss://relay.example.com/v1/connect
@@ -26,15 +28,30 @@ export class Rat2eRelayClient {
     this.ws = ws;
 
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => events?.onOpen?.();
+    ws.onopen = async () => {
+      try {
+        const { NoiseXX } = await import('../noise/noiseXX');
+        this.noise = new NoiseXX();
+        await this.noise.init();
+        await this.noise.startResponder(ws);
+      } catch (e) {
+        console.warn('NoiseXX/DevNoise handshake failed or not available', e);
+      }
+      events?.onOpen?.();
+    };
     ws.onerror = (ev) => events?.onError?.(ev);
     ws.onclose = (ev) => events?.onClose?.(ev);
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') {
-        // Ciphertext frames only per spec; application plaintext is E2E encrypted
-        events?.onCiphertext?.(ev.data as ArrayBuffer);
+        const buf = ev.data as ArrayBuffer;
+        events?.onCiphertext?.(buf);
+        if (this.noise) {
+          try { const obj = await this.noise.decryptFrame(buf); if (obj) events?.onJson?.(obj); } catch {}
+        }
+      } else {
+        // Accept plaintext handshake JSON only
+        try { const o = JSON.parse(ev.data); if (o?.type?.startsWith('dev_noise')) events?.onJson?.(o); } catch {}
       }
-      // Any plaintext strings before Noise is established should be ignored in v1
     };
   }
 
@@ -43,8 +60,19 @@ export class Rat2eRelayClient {
     this.ws.send(ciphertext);
   }
 
+  sendJson(obj: any) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.noise) {
+      this.noise.encryptJson(obj).then((buf: ArrayBuffer) => this.ws!.send(buf));
+    } else {
+      // Fallback dev path
+      const text = JSON.stringify(obj);
+      const data = new TextEncoder().encode(text);
+      this.ws.send(data);
+    }
+  }
+
   close(code?: number, reason?: string) {
     this.ws?.close(code, reason);
   }
 }
-

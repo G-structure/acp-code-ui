@@ -14,6 +14,12 @@ export default defineConfig({
         target: `http://${bindIP}:3001`,
         changeOrigin: true
       },
+      // Serve WASM either directly from frontend/public (preferred),
+      // or proxy to backend route when using NOISE_WASM_PATH/back-end static.
+      '/noise_xx_bg.wasm': {
+        target: `http://${bindIP}:3001`,
+        changeOrigin: true
+      },
       '/ws': {
         target: `ws://${bindIP}:3002`,
         ws: true

@@ -34,7 +34,7 @@ import JsonDebugViewer from './components/JsonDebugViewer';
 import TodoPanel from './components/TodoPanel';
 import ResizablePanel from './components/ResizablePanel';
 import CodeEditor from './components/CodeEditor';
-import { useWebSocket } from './hooks/useWebSocket';
+// Legacy backend WebSocket removed; use RAT2E relay only
 import { Rat2eRelayClient } from './utils/rat2eRelay';
 import { useClaudeStore } from './store/claudeStore';
 
@@ -94,8 +94,23 @@ function App() {
           onClose: () => setRatStatus('Closed'),
           onError: () => setRatStatus('Error'),
           onCiphertext: (buf) => {
-            // For MVP, just note we received ciphertext
-            console.debug('RAT2E ciphertext frame', buf.byteLength);
+            console.debug('RAT2E frame', buf.byteLength);
+          },
+          onJson: (obj) => {
+            // Minimal handler mimicking legacy backend message shapes
+            try {
+              const { addMessage, updateMessage, finalizeMessage, setProcessingStatus } = useClaudeStore.getState();
+              if (obj.type === 'chat-message' && obj.message) {
+                addMessage(obj.message);
+              } else if (obj.type === 'chat-message-update' && obj.data?.id) {
+                updateMessage(obj.data.id, obj.data.content || '', { model: obj.data.model, tokens: obj.data.usage?.output_tokens });
+              } else if (obj.type === 'chat-message-finalize' && obj.data?.id) {
+                finalizeMessage(obj.data.id);
+              } else if (obj.type === 'thinking' && obj.content) {
+                setProcessingStatus(`💭 ${String(obj.content).slice(0, 200)}`);
+                addMessage({ id: `thinking-${Date.now()}`, type: 'thinking', content: obj.content, timestamp: Date.now() });
+              }
+            } catch (e) { console.error('Failed to handle RAT2E JSON', e, obj); }
           }
         }
       });
@@ -103,13 +118,18 @@ function App() {
       setRatStatus(`Error: ${e?.message || String(e)}`);
     }
   }, [ratUserCode]);
+
+  const sendPromptOverRelay = useCallback((prompt: string) => {
+    if (!ratRelayRef.current) { alert('Connect RAT2E first'); return; }
+    ratRelayRef.current.sendJson({ type: 'send-prompt', prompt });
+  }, []);
   
-  const { isConnected, sendMessage, stopProcess } = useWebSocket(() => {
-    // Refresh sessions list when Claude is ready (finished processing)
-    if (workingDirectory) {
-      loadAvailableSessions(workingDirectory);
-    }
-  });
+  // Stubs until ACP-over-relay is wired
+  const isConnected = false;
+  const sendMessage = (_msg: any) => {
+    alert('Not yet connected to ACP over RAT2E relay. This UI no longer uses the legacy backend.');
+  };
+  const stopProcess = () => {};
   const { sessionActive, startSession, sendPrompt, clearMessages, activeSessionId, updateSessionMessages, sessions, createSession, switchSession, addMessage } = useClaudeStore();
   
   // Load directory from URL and history on mount
@@ -528,11 +548,8 @@ function App() {
     }
     
     sendPrompt(finalPrompt);
-    sendMessage({
-      type: 'send-prompt',
-      prompt: finalPrompt,
-      markdownFiles // Include in the message for logging
-    });
+    // Route prompt through RAT2E relay (ACP over tunnel to be wired)
+    sendPromptOverRelay(finalPrompt);
     
     // Refresh sessions list after sending a message to update timestamps
     if (workingDirectory) {
@@ -540,7 +557,7 @@ function App() {
         loadAvailableSessions(workingDirectory);
       }, 1000);
     }
-  }, [sendPrompt, sendMessage, workingDirectory, addMessage]);
+  }, [sendPrompt, workingDirectory, addMessage, sendPromptOverRelay]);
 
   const handleCompactConversation = useCallback(async () => {
     if (!activeSessionId || !workingDirectory) return;
@@ -720,7 +737,7 @@ function App() {
             <TextField size="small" label="RAT2E Code" variant="outlined" value={ratUserCode} onChange={(e) => setRatUserCode(e.target.value)} />
             <Button variant="contained" color="secondary" onClick={connectRat2e}>Connect</Button>
             {ratStatus && (
-              <Chip size="small" label={ratStatus} color={ratStatus === 'Connected' ? 'success' as any : 'default'} />
+              <Chip size="small" label={`RAT2E: ${ratStatus}`} color={ratStatus === 'Connected' ? 'success' as any : 'default'} />
             )}
           </Box>
           
@@ -911,11 +928,7 @@ function App() {
           )}
           
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            {isConnected ? (
-              <Chip label="Connected" color="success" size="small" />
-            ) : (
-              <Chip label="Disconnected" color="error" size="small" />
-            )}
+            <Chip label="Backend: removed" color="default" size="small" />
             <IconButton
               size="small"
               onClick={(e) => setMenuAnchor(e.currentTarget)}

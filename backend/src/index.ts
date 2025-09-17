@@ -17,17 +17,15 @@ const app = express();
 const port = process.env.PORT || 3001;
 const wsPort = process.env.WS_PORT || 3002; // Separate WebSocket port
 const bindIP = process.env.BIND_IP || 'localhost'; // IP address to bind to
+const legacyBackend = process.env.LEGACY_BACKEND === '1';
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increase limit for JSON session uploads
 
 const server = createServer(app);
 
-// Create a separate WebSocket server on a different port, bound to specified IP
-const wss = new WebSocketServer({ 
-  port: wsPort,
-  host: bindIP // Bind to specified IP address
-});
+// Legacy backend WebSocket server (disabled by default)
+const wss = legacyBackend ? new WebSocketServer({ port: wsPort, host: bindIP }) : null as any;
 
 const claudeManager = new ClaudeCodeManager();
 const hookServer = new HookServer(claudeManager);
@@ -35,23 +33,19 @@ const fsAPI = new FileSystemAPI();
 
 // Set up event forwarding to all connected clients
 claudeManager.on('session-started', (data) => {
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
-      client.send(JSON.stringify({
-        type: 'session-started',
-        data
-      }));
+      client.send(JSON.stringify({ type: 'session-started', data }));
     }
   });
 });
 
 claudeManager.on('system-info', (data) => {
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
-      client.send(JSON.stringify({
-        type: 'system-info',
-        data
-      }));
+      client.send(JSON.stringify({ type: 'system-info', data }));
     }
   });
 });
@@ -78,7 +72,8 @@ claudeManager.on('chat-message', async (message) => {
     logger.debug('Failed to log chat message:', error);
   }
   
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({
         type: 'chat-message',
@@ -90,7 +85,8 @@ claudeManager.on('chat-message', async (message) => {
 
 // Chat message updates (for streaming)
 claudeManager.on('chat-message-update', (data) => {
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({
         type: 'chat-message-update',
@@ -102,7 +98,8 @@ claudeManager.on('chat-message-update', (data) => {
 
 // Chat message finalize (end of streaming)
 claudeManager.on('chat-message-finalize', (data) => {
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({
         type: 'chat-message-finalize',
@@ -114,7 +111,8 @@ claudeManager.on('chat-message-finalize', (data) => {
 
 // JSON debug events
 claudeManager.on('json-debug', (data) => {
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({
         type: 'json-debug',
@@ -125,7 +123,8 @@ claudeManager.on('json-debug', (data) => {
 });
 
 claudeManager.on('error', (error) => {
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({
         type: 'error',
@@ -137,7 +136,8 @@ claudeManager.on('error', (error) => {
 
 claudeManager.on('ready', () => {
   logger.info('Claude is ready, notifying clients');
-  wss.clients.forEach((client) => {
+  if (!wss) return;
+  wss.clients.forEach((client: any) => {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify({
         type: 'ready'
@@ -214,7 +214,7 @@ hookServer.on('hook-event', (event) => {
   });
 });
 
-wss.on('connection', (ws: any) => {
+if (wss) wss.on('connection', (ws: any) => {
   logger.info('New WebSocket connection established');
   
   // Set up ping-pong keepalive
@@ -453,6 +453,36 @@ app.get('/api/markdown-files', async (req, res) => {
 
 // RAT2E proxy routes (pairing + presence)
 app.use('/api/rat2e', rat2eRoutes);
+
+// Serve Noise XX WASM bundle if provided.
+// Priority:
+// 1) NOISE_WASM_PATH env var (absolute or relative to CWD)
+// 2) backend/static/noise_xx_bg.wasm (checked into repo or mounted at runtime)
+app.get('/noise_xx_bg.wasm', async (req, res) => {
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    const envPath = process.env.NOISE_WASM_PATH;
+    let wasmPath: string | null = null;
+    if (envPath) {
+      const p = path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
+      try { await fs.access(p); wasmPath = p; } catch {}
+    }
+    if (!wasmPath) {
+      const fallback = path.resolve(__dirname, '../static/noise_xx_bg.wasm');
+      try { await fs.access(fallback); wasmPath = fallback; } catch {}
+    }
+    if (!wasmPath) {
+      res.status(404).send('noise_xx_bg.wasm not found. Provide NOISE_WASM_PATH or place file at backend/static/noise_xx_bg.wasm');
+      return;
+    }
+    const data = await fs.readFile(wasmPath);
+    res.setHeader('Content-Type', 'application/wasm');
+    res.send(data);
+  } catch (err: any) {
+    res.status(500).send(`Failed to serve WASM: ${err?.message || err}`);
+  }
+});
 
 app.post('/api/markdown-content', async (req, res) => {
   const { files } = req.body;
@@ -749,7 +779,7 @@ app.use('/api/voice', voiceRouter);
 
 server.listen(port, bindIP, () => {
   logger.info(`Claude Code Web UI backend running on ${bindIP}:${port}`);
-  logger.info(`WebSocket server running on ${bindIP}:${wsPort}`);
+  if (wss) logger.info(`WebSocket server running on ${bindIP}:${wsPort}`);
   hookServer.start();
 });
 
