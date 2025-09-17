@@ -121,6 +121,12 @@ cd ..
 cd frontend
 npm install
 cd ..
+
+# Build WASM (requires nix)
+cd noise-wasm
+nix develop -c wasm-pack build --target web --out-dir pkg
+cp pkg/noise_wasm_bg.wasm ../frontend/public/noise_xx_bg.wasm
+cd ..
 ```
 
 ## Usage
