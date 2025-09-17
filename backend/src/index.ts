@@ -345,7 +345,7 @@ const pingInterval = setInterval(() => {
   });
 }, 30000); // Ping every 30 seconds
 
-wss.on('close', () => {
+wss?.on('close', () => {
   clearInterval(pingInterval);
 });
 
