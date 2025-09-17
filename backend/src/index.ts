@@ -8,6 +8,7 @@ import { FileSystemAPI } from './filesystem-api';
 import { logger } from './logger';
 import directoryHistoryRoutes from './routes/directory-history';
 import voiceRouter from './routes/voice';
+import rat2eRoutes from './routes/rat2e';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -449,6 +450,9 @@ app.get('/api/markdown-files', async (req, res) => {
     });
   }
 });
+
+// RAT2E proxy routes (pairing + presence)
+app.use('/api/rat2e', rat2eRoutes);
 
 app.post('/api/markdown-content', async (req, res) => {
   const { files } = req.body;

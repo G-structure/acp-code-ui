@@ -35,6 +35,7 @@ import TodoPanel from './components/TodoPanel';
 import ResizablePanel from './components/ResizablePanel';
 import CodeEditor from './components/CodeEditor';
 import { useWebSocket } from './hooks/useWebSocket';
+import { Rat2eRelayClient } from './utils/rat2eRelay';
 import { useClaudeStore } from './store/claudeStore';
 
 const DRAWER_WIDTH = 360;
@@ -63,6 +64,45 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasStartedSession = useRef(false);
   const tabsRef = useRef<HTMLDivElement>(null);
+  // RAT2E minimal pairing/connect state
+  const [ratUserCode, setRatUserCode] = useState('');
+  const [ratStatus, setRatStatus] = useState('');
+  const ratRelayRef = useRef<Rat2eRelayClient | null>(null);
+
+  const connectRat2e = useCallback(async () => {
+    try {
+      if (!ratUserCode) { setRatStatus('Enter code'); return; }
+      setRatStatus('Completing...');
+      const r = await fetch('/api/rat2e/complete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user_code: ratUserCode })
+      });
+      if (!r.ok) { setRatStatus(`Complete failed: ${r.status}`); return; }
+      const data = await r.json();
+      const relayWsUrl = data.relay_ws_url as string;
+      const sessionId = data.session_id as string;
+      const token = data.attach_token_sha256 as string;
+      const client = new Rat2eRelayClient();
+      ratRelayRef.current = client;
+      client.connect({
+        relayWsUrl,
+        sessionId,
+        stkSha256B64u: token,
+        events: {
+          onOpen: () => setRatStatus('Connected'),
+          onClose: () => setRatStatus('Closed'),
+          onError: () => setRatStatus('Error'),
+          onCiphertext: (buf) => {
+            // For MVP, just note we received ciphertext
+            console.debug('RAT2E ciphertext frame', buf.byteLength);
+          }
+        }
+      });
+    } catch (e: any) {
+      setRatStatus(`Error: ${e?.message || String(e)}`);
+    }
+  }, [ratUserCode]);
   
   const { isConnected, sendMessage, stopProcess } = useWebSocket(() => {
     // Refresh sessions list when Claude is ready (finished processing)
@@ -675,6 +715,14 @@ function App() {
           <Typography variant="h7" noWrap component="div" sx={{ mr: 2 }}>
             claude_code_web
           </Typography>
+          {/* RAT2E quick connect (MVP) */}
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', ml: 2 }}>
+            <TextField size="small" label="RAT2E Code" variant="outlined" value={ratUserCode} onChange={(e) => setRatUserCode(e.target.value)} />
+            <Button variant="contained" color="secondary" onClick={connectRat2e}>Connect</Button>
+            {ratStatus && (
+              <Chip size="small" label={ratStatus} color={ratStatus === 'Connected' ? 'success' as any : 'default'} />
+            )}
+          </Box>
           
           {/* Session Tabs */}
           {workingDirectory && (
