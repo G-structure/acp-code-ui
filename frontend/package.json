@@ -10,6 +10,7 @@
     "@mui/material": "^5.15.3",
     "@types/react-virtualized-auto-sizer": "^1.0.4",
     "@types/react-window": "^1.8.8",
+    "@zed-industries/agent-client-protocol": "^0.3.1",
     "axios": "^1.6.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

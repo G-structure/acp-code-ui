@@ -34,9 +34,11 @@ import JsonDebugViewer from './components/JsonDebugViewer';
 import TodoPanel from './components/TodoPanel';
 import ResizablePanel from './components/ResizablePanel';
 import CodeEditor from './components/CodeEditor';
-// Legacy backend WebSocket removed; use RAT2E relay only
+// Legacy backend WebSocket removed; use RAT2E relay with ACP support
 import { Rat2eRelayClient } from './utils/rat2eRelay';
+import { WebACPClient } from './utils/acpClient';
 import { useClaudeStore } from './store/claudeStore';
+import * as acp from '@zed-industries/agent-client-protocol';
 
 const DRAWER_WIDTH = 360;
 
@@ -64,10 +66,99 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasStartedSession = useRef(false);
   const tabsRef = useRef<HTMLDivElement>(null);
-  // RAT2E minimal pairing/connect state
+  // RAT2E with ACP minimal pairing/connect state
   const [ratUserCode, setRatUserCode] = useState('');
   const [ratStatus, setRatStatus] = useState('');
   const ratRelayRef = useRef<Rat2eRelayClient | null>(null);
+  const acpClientRef = useRef<WebACPClient | null>(null);
+
+  // ACP event handlers
+  const handleACPSessionUpdate = useCallback((notification: acp.SessionNotification) => {
+    const { addMessage, updateMessage, setProcessingStatus } = useClaudeStore.getState();
+    const update = notification.update;
+
+    switch (update.sessionUpdate) {
+      case 'agent_message_chunk':
+        if (update.content.type === 'text') {
+          // Handle text content from agent
+          const messageId = `acp-msg-${Date.now()}`;
+          addMessage({
+            id: messageId,
+            type: 'assistant' as const,
+            content: update.content.text,
+            timestamp: Date.now()
+          });
+        }
+        break;
+
+      case 'tool_call':
+        // Handle tool call start
+        addMessage({
+          id: update.toolCallId,
+          type: 'tool_use' as const,
+          content: `🔧 ${update.title} (${update.status})`,
+          tool_name: update.title,
+          timestamp: Date.now()
+        });
+        break;
+
+      case 'tool_call_update':
+        // Handle tool call progress updates
+        updateMessage(
+          update.toolCallId,
+          `🔧 Tool call updated: ${update.status}`,
+          {}
+        );
+        break;
+
+      case 'plan':
+        // Handle execution plan
+        addMessage({
+          id: `plan-${Date.now()}`,
+          type: 'system' as const,
+          content: `📋 Plan: ${JSON.stringify(update.entries)}`,
+          timestamp: Date.now()
+        });
+        break;
+
+      case 'agent_thought_chunk':
+        // Handle agent thoughts
+        setProcessingStatus(`💭 ${update.content.type === 'text' ? update.content.text.slice(0, 200) : 'Thinking...'}`);
+        break;
+
+      case 'user_message_chunk':
+        // Handle user message chunks (if needed)
+        break;
+
+      default:
+        console.log('Unhandled ACP session update:', update);
+    }
+  }, []);
+
+  const handleACPPermissionRequest = useCallback(async (request: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> => {
+    // For now, show a browser prompt - in a real app you'd want a proper UI
+    const approved = window.confirm(
+      `Permission requested: ${request.toolCall.title}\n\nOptions:\n${request.options.map(opt => `- ${opt.name} (${opt.kind})`).join('\n')}\n\nApprove?`
+    );
+
+    if (approved) {
+      const approvedOption = request.options.find(opt => opt.kind === 'allow_once' || opt.kind === 'allow_always') || request.options[0];
+      return {
+        outcome: {
+          outcome: 'selected',
+          optionId: approvedOption.optionId,
+        }
+      };
+    } else {
+      const rejectedOption = request.options.find(opt => opt.kind === 'reject_once' || opt.kind === 'reject_always') || request.options[0];
+      return {
+        outcome: {
+          outcome: 'selected',
+          optionId: rejectedOption.optionId,
+        }
+      };
+    }
+  }, []);
 
   const connectRat2e = useCallback(async () => {
     try {
@@ -89,15 +180,25 @@ function App() {
         relayWsUrl,
         sessionId,
         stkSha256B64u: token,
+        workingDirectory,
         events: {
           onOpen: () => setRatStatus('Connected'),
           onClose: () => setRatStatus('Closed'),
           onError: () => setRatStatus('Error'),
+          onACPReady: (acpClient) => {
+            console.log('ACP client ready');
+            acpClientRef.current = acpClient;
+            setRatStatus('ACP Ready');
+          },
+          onACPError: (error) => {
+            console.error('ACP error:', error);
+            setRatStatus(`ACP Error: ${error.message}`);
+          },
           onCiphertext: (buf) => {
             console.debug('RAT2E frame', buf.byteLength);
           },
           onJson: (obj) => {
-            // Minimal handler mimicking legacy backend message shapes
+            // Legacy handler for non-ACP messages (fallback)
             try {
               const { addMessage, updateMessage, finalizeMessage, setProcessingStatus } = useClaudeStore.getState();
               if (obj.type === 'chat-message' && obj.message) {
@@ -112,6 +213,24 @@ function App() {
               }
             } catch (e) { console.error('Failed to handle RAT2E JSON', e, obj); }
           }
+        },
+        acpEvents: {
+          onSessionUpdate: (notification) => {
+            console.log('ACP session update:', notification);
+            handleACPSessionUpdate(notification);
+          },
+          onPermissionRequest: async (request) => {
+            console.log('ACP permission request:', request);
+            return await handleACPPermissionRequest(request);
+          },
+          onConnectionReady: () => {
+            console.log('ACP connection established');
+            setRatStatus('ACP Connected');
+          },
+          onConnectionError: (error) => {
+            console.error('ACP connection error:', error);
+            setRatStatus(`ACP Error: ${error.message}`);
+          }
         }
       });
     } catch (e: any) {
@@ -119,18 +238,41 @@ function App() {
     }
   }, [ratUserCode]);
 
-  const sendPromptOverRelay = useCallback((prompt: string) => {
-    if (!ratRelayRef.current) { alert('Connect RAT2E first'); return; }
-    ratRelayRef.current.sendJson({ type: 'send-prompt', prompt });
+  const sendPromptOverRelay = useCallback(async (prompt: string) => {
+    if (!ratRelayRef.current) { 
+      alert('Connect RAT2E first'); 
+      return; 
+    }
+
+    // Try ACP first, fallback to legacy JSON
+    if (acpClientRef.current && acpClientRef.current.ready) {
+      try {
+        await acpClientRef.current.prompt([{ type: 'text', text: prompt }]);
+        console.log('Sent prompt via ACP');
+      } catch (error) {
+        console.error('Failed to send ACP prompt:', error);
+        // Fallback to legacy method
+        ratRelayRef.current.sendJson({ type: 'send-prompt', prompt });
+      }
+    } else {
+      // Legacy fallback
+      ratRelayRef.current.sendJson({ type: 'send-prompt', prompt });
+      console.log('Sent prompt via legacy method');
+    }
   }, []);
   
-  // Stubs until ACP-over-relay is wired
-  const isConnected = false;
+  // Connection status - now based on ACP readiness
+  const isConnected = acpClientRef.current?.ready || false;
   const sendMessage = (_msg: any) => {
-    alert('Not yet connected to ACP over RAT2E relay. This UI no longer uses the legacy backend.');
+    // Legacy sendMessage method - now routes through ACP if available
+    if (acpClientRef.current?.ready) {
+      console.log('Legacy sendMessage call - ACP is available');
+    } else {
+      console.log('Legacy sendMessage call - ACP not ready');
+    }
   };
   const stopProcess = () => {};
-  const { sessionActive, startSession, sendPrompt, clearMessages, activeSessionId, updateSessionMessages, sessions, createSession, switchSession, addMessage } = useClaudeStore();
+  const { sendPrompt, clearMessages, activeSessionId, updateSessionMessages, sessions, createSession, switchSession, addMessage } = useClaudeStore();
   
   // Load directory from URL and history on mount
   useEffect(() => {
@@ -250,7 +392,7 @@ function App() {
       // This handles the case where Claude changed our session ID
       const currentActiveId = useClaudeStore.getState().activeSessionId;
       if (currentActiveId) {
-        const matchingSession = sessions.find(s => 
+        const matchingSession = sessions.find((s: any) => 
           s.claudeSessionId === currentActiveId || s.id === currentActiveId
         );
         if (matchingSession && matchingSession.id !== currentActiveId) {
@@ -536,7 +678,7 @@ function App() {
           // Add a note in the UI that we included system files
           const systemNote = {
             id: `system-md-${Date.now()}`,
-            type: 'system',
+            type: 'system' as const,
             content: `📎 Included ${markdownFiles.length} markdown file(s) as system instructions: ${markdownFiles.map(f => f.split('/').pop()).join(', ')}`,
             timestamp: Date.now()
           };
@@ -582,7 +724,7 @@ function App() {
     // Add a status message that we're compacting
     const compactingMessage = {
       id: `compact-${Date.now()}`,
-      type: 'system',
+      type: 'system' as const,
       content: '⏳ Compacting conversation history... This may take up to 3 minutes.',
       timestamp: Date.now()
     };
@@ -616,7 +758,7 @@ function App() {
       // Add a success message
       const successMessage = {
         id: `compact-success-${Date.now()}`,
-        type: 'system', 
+        type: 'system' as const, 
         content: '✅ Conversation compacted! The summary has been added to the message box below. You can edit it before sending.',
         timestamp: Date.now()
       };
@@ -652,7 +794,7 @@ function App() {
       const errorDetail = error.message || 'Unknown error occurred';
       const errorMessage = {
         id: `compact-error-${Date.now()}`,
-        type: 'system',
+        type: 'system' as const,
         content: `❌ Failed to compact conversation: ${errorDetail}\n\nTry reducing the conversation size or restarting the application.`,
         timestamp: Date.now()
       };
@@ -729,7 +871,7 @@ function App() {
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h7" noWrap component="div" sx={{ mr: 2 }}>
+          <Typography variant="h6" noWrap component="div" sx={{ mr: 2 }}>
             claude_code_web
           </Typography>
           {/* RAT2E quick connect (MVP) */}
@@ -928,7 +1070,11 @@ function App() {
           )}
           
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Chip label="Backend: removed" color="default" size="small" />
+            <Chip 
+              label={acpClientRef.current?.ready ? "ACP: Ready" : "Backend: ACP"} 
+              color={acpClientRef.current?.ready ? "success" : "default"} 
+              size="small" 
+            />
             <IconButton
               size="small"
               onClick={(e) => setMenuAnchor(e.currentTarget)}

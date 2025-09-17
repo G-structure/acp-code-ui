@@ -588,7 +588,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ onSendMessage, onStopProc
         // Add a visual indicator in the UI
         const thinkingNote = {
           id: `thinking-mode-${Date.now()}`,
-          type: 'system',
+          type: 'system' as const,
           content: `🧠 Using ${thinkingMode} thinking mode`,
           timestamp: Date.now()
         };
